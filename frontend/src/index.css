@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* High-Contrast Theme System - "Anti-Blur" Config */
+/* Uses CSS variables + Tailwind semantic classes for sharp Light/Dark switching */
+
+:root {
+  /* Light Mode (Slate/Zinc) */
+  --background: #FFFFFF;
+  --surface: #F8FAFC;
+  --primary-text: #0F172A;
+  --secondary-text: #64748B;
+  --accent-border: #E2E8F0;
+  --success: #16A34A;
+}
+
+.dark {
+  /* Dark Mode (Midnight/Onyx) */
+  --background: #0A0A0B;
+  --surface: #171717;
+  --primary-text: #F8FAFC;
+  --secondary-text: #A1A1AA;
+  --accent-border: #262626;
+  --success: #4ADE80;
+}
+
+/* Base styles */
+body {
+  background-color: var(--background);
+  color: var(--primary-text);
+  font-family: 'Inter', system_ui, sans-serif;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Surface cards */
+.surface {
+  background-color: var(--surface);
+  border: 1px solid var(--accent-border);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+/* Text colors */
+.text-primary {
+  color: var(--primary-text);
+}
+
+.text-secondary {
+  color: var(--secondary-text);
+}
+
+/* Success/Profit color */
+.text-success {
+  color: var(--success);
+}
+
+/* Fill Score Badges */
+.badge-A {
+  background-color: #15803d;
+  color: white;
+}
+
+.badge-B {
+  background-color: #4ade80;
+  color: #0f172a;
+}
+
+.badge-C {
+  background-color: #eab308;
+  color: #0f172a;
+}
+
+.badge-D {
+  background-color: #f97316;
+  color: white;
+}
+
+.badge-F {
+  background-color: #ef4444;
+  color: white;
+}
+
+/* Table styling for Live Pulse */
+table {
+  border-collapse: collapse;
+}
+
+th, td {
+  border-bottom: 1px solid var(--accent-border);
+  transition: border-color 150ms ease;
+}
+
+/* Sharp focus states */
+button, .clickable {
+  transition: all 150ms ease;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+.gap-row {
+  transition: background-color 100ms ease;
+}
+
+.gap-row:hover {
+  background-color: rgba(148, 163, 184, 0.08);
+}
+
+/* Real-time number flicker effect */
+.number-update {
+  animation: numberPop 300ms ease;
+}
+
+@keyframes numberPop {
+  0% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* High contrast improvements */
+h1, h2, h3 {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+/* Ensure no blurry text on theme switch */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
