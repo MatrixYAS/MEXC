@@ -1,0 +1,15 @@
+# Rust
+backend/target/
+backend/mexc.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Data
+data/
+*.db
+
+# Docker
+.docker/
