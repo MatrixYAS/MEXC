@@ -1,0 +1,76 @@
+[package]
+name = "mexc-ghost-hunter"
+version = "0.1.0"
+edition = "2021"
+authors = ["Yassine"]
+description = "MEXC Triangle Arbitrage Ghost Hunter - Zero-degradation Rust backend with React dashboard"
+license = "MIT"
+
+[dependencies]
+# Core Async & Runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = "0.7"
+
+# WebSocket Client (tungstenite + tokio integration)
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tungstenite = "0.24"
+futures-util = { version = "0.3", features = ["sink", "stream"] }
+
+# HTTP Client for REST (rate-limited)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Rate Limiter (Token Bucket for REST API Guard)
+governor = { version = "0.6", features = ["std", "jitter"] }
+nonzero_ext = "0.3"
+
+# Lock-Free State Sharing (arc-swap for Order Books)
+arc-swap = "1.7"
+
+# Serialization / Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# SQLite Persistence (sqlx with WAL mode)
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite",
+    "chrono",
+    "macros",
+    "migrate"
+] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# System Telemetry
+sysinfo = "0.33"
+
+# Web Server (Axum) + SSE for Frontend
+axum = { version = "0.7", features = ["ws", "tokio"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Logging & Error Handling
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+thiserror = "2.0"
+
+# UUID for unique opportunity IDs
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Optional: For future paper trading simulation
+rand = "0.8"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
