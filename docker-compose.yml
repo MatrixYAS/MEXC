@@ -1,0 +1,38 @@
+version: '3.9'
+
+services:
+  mexc-ghost-hunter:
+    build: .
+    container_name: mexc-ghost-hunter
+    ports:
+      - "7860:7860"      # Main port (Hugging Face + local access)
+      - "5173:5173"      # Vite dev server (optional, for frontend development)
+    volumes:
+      - ./data:/data     # Persistent SQLite database (mexc.db)
+      - ./backend/mexc.db:/app/mexc.db  # Optional direct mapping
+    environment:
+      - PORT=7860
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7860/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Development frontend only (for hot reload during UI work)
+  frontend-dev:
+    image: node:20-alpine
+    container_name: mexc-frontend-dev
+    working_dir: /app/frontend
+    volumes:
+      - ./frontend:/app/frontend
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host"
+    profiles:
+      - dev
+    depends_on:
+      - mexc-ghost-hunter
