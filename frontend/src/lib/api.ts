@@ -1,10 +1,9 @@
 // frontend/src/lib/api.ts
-// API client for communicating with the Rust backend
-// Supports both REST and future SSE streaming
+// Updated per guide: Added API Key management + Today Stats + Test Connection
 
 const API_BASE = import.meta.env.DEV 
   ? 'http://localhost:7860' 
-  : '';  // In production (Docker/Hugging Face), same origin
+  : '';  
 
 export interface TriangleOpportunity {
   id: string;
@@ -31,6 +30,17 @@ export interface HealthResponse {
   telemetry: TelemetryData;
 }
 
+export interface ApiKeyRequest {
+  api_key: string;
+  secret_key: string;
+}
+
+export interface TodayStats {
+  gaps_found: number;
+  avg_yield: number;
+  total_potential: number;
+}
+
 // Generic GET helper
 async function get<T>(endpoint: string): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`);
@@ -42,30 +52,56 @@ async function get<T>(endpoint: string): Promise<T> {
   return response.json();
 }
 
+// Generic POST helper
+async function post<T>(endpoint: string, body: any): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
 // Main API functions
 export const api = {
-  // Health check
   health: async (): Promise<HealthResponse> => {
     return get<HealthResponse>('/api/health');
   },
 
-  // Real-time telemetry
   telemetry: async (): Promise<TelemetryData> => {
     return get<TelemetryData>('/api/telemetry');
   },
 
-  // Recent verified opportunities (for "Verified Executions" page)
   recentOpportunities: async (limit: number = 50): Promise<TriangleOpportunity[]> => {
     return get<TriangleOpportunity[]>(`/api/opportunities?limit=${limit}`);
   },
 
-  // Current whitelist (for Market Maintenance page)
   whitelist: async (): Promise<string[]> => {
     return get<string[]>('/api/whitelist');
   },
+
+  // NEW: API Key management (guide 2.2)
+  saveApiKeys: async (payload: ApiKeyRequest): Promise<any> => {
+    return post('/api/keys', payload);
+  },
+
+  // NEW: Test MEXC connection
+  testMexcConnection: async (payload: ApiKeyRequest): Promise<any> => {
+    return post('/api/test-mexc-connection', payload);
+  },
+
+  // NEW: Today stats for Verified Executions page (guide 2.4)
+  todayStats: async (): Promise<TodayStats> => {
+    return get<TodayStats>('/api/today-stats');
+  },
 };
 
-// Future SSE helper (will be used in useSSE hook)
+// SSE helper (kept for future use)
 export function createSSEConnection(endpoint: string, onMessage: (data: any) => void) {
   const eventSource = new EventSource(`${API_BASE}${endpoint}`);
   
@@ -80,7 +116,6 @@ export function createSSEConnection(endpoint: string, onMessage: (data: any) => 
 
   eventSource.onerror = (error) => {
     console.error('SSE connection error:', error);
-    // Auto-reconnect logic can be added here
   };
 
   return eventSource;
