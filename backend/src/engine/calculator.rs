@@ -1,17 +1,27 @@
+// backend/src/engine/calculator.rs
+// Updated: TARGET_VOLUME_USD is now read from environment variable (per guide 1.3)
+
 use crate::data::models::{OrderBookLevels, PriceLevel};
 use chrono::Utc;
 
 /// Core Math Engine - Real-World Weighted Average Fill + Triple-Tax Net Profit
 ///
 /// Follows the PRD exactly:
-/// - Simulates eating $1000 USD (or bottleneck) through the order book
+/// - Simulates eating $1,000 USD (or bottleneck) through the order book
 /// - Uses stack-allocated [PriceLevel; 20]
 /// - Triple 0.1% taker fee → (0.999)^3
 /// - Only gaps >= 0.15% net are considered
 
-const TARGET_VOLUME_USD: f64 = 1000.0;
 const TAKER_FEE: f64 = 0.001; // 0.1% as per PRD
-const MIN_NET_YIELD: f64 = 0.0015; // 0.15%
+const MIN_NET_YIELD: f64 = 0.0015; // 0.15% - this is also externalized in validator.rs
+
+/// Reads TARGET_VOLUME_USD from environment variable with fallback (guide requirement)
+fn get_target_volume() -> f64 {
+    std::env::var("TARGET_VOLUME_USD")
+        .unwrap_or_else(|_| "1000.0".to_string())
+        .parse::<f64>()
+        .expect("TARGET_VOLUME_USD must be a valid float (e.g. 1000.0)")
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FillResult {
@@ -45,7 +55,7 @@ pub fn calculate_weighted_fill_price(levels: &[PriceLevel; 20], target_volume: f
         }
     }
 
-    let is_low_liquidity = filled < target_volume * 0.95; // Allow small tolerance
+    let is_low_liquidity = filled < target_volume * 0.95;
 
     let fill_price = if filled > 0.0 {
         total_cost / filled
@@ -61,12 +71,10 @@ pub fn calculate_weighted_fill_price(levels: &[PriceLevel; 20], target_volume: f
 }
 
 /// Triple-Tax Net Profit Formula (exactly as in PRD)
-///
-/// Net% = ( (Input * P_fill1 * P_fill2 * P_fill3 / Input) * (0.999)^3 ) - 1
 pub fn calculate_net_yield(
-    p1: f64, // fill price leg 1 (buy)
-    p2: f64, // fill price leg 2
-    p3: f64, // fill price leg 3 (sell back)
+    p1: f64,
+    p2: f64,
+    p3: f64,
 ) -> f64 {
     if p1 <= 0.0 || p2 <= 0.0 || p3 <= 0.0 {
         return -1.0;
@@ -81,11 +89,12 @@ pub fn calculate_net_yield(
 
 /// Main function: Validates a triangle with real-world slippage simulation
 pub fn validate_triangle(
-    book1: &OrderBookLevels, // e.g. USDT->BTC (ask side for buy)
-    book2: &OrderBookLevels, // e.g. BTC->PEPE
-    book3: &OrderBookLevels, // e.g. PEPE->USDT (bid side for sell)
-) -> Option<(f64, f64)> {  // (net_yield, effective_capacity)
-    
+    book1: &OrderBookLevels,
+    book2: &OrderBookLevels,
+    book3: &OrderBookLevels,
+) -> Option<(f64, f64)> {
+    let target_volume = get_target_volume();   // ← Now dynamic from ENV
+
     // Check staleness first (2000ms as per PRD)
     let max_stale_ms = 2000;
     if book1.is_stale(max_stale_ms) || 
@@ -94,10 +103,9 @@ pub fn validate_triangle(
         return None;
     }
 
-    // Simulate $1000 fill on all three legs
-    let fill1 = calculate_weighted_fill_price(&book1.asks, TARGET_VOLUME_USD); // Buy leg → use asks
-    let fill2 = calculate_weighted_fill_price(&book2.asks, TARGET_VOLUME_USD);
-    let fill3 = calculate_weighted_fill_price(&book3.bids, TARGET_VOLUME_USD); // Sell leg → use bids
+    let fill1 = calculate_weighted_fill_price(&book1.asks, target_volume);
+    let fill2 = calculate_weighted_fill_price(&book2.asks, target_volume);
+    let fill3 = calculate_weighted_fill_price(&book3.bids, target_volume);
 
     if fill1.is_low_liquidity || fill2.is_low_liquidity || fill3.is_low_liquidity {
         return None;
@@ -105,13 +113,11 @@ pub fn validate_triangle(
 
     let net_yield = calculate_net_yield(fill1.fill_price, fill2.fill_price, fill3.fill_price);
 
-    // Minimalist Filter: only send gaps >= 0.15%
     if net_yield < MIN_NET_YIELD {
         return None;
     }
 
-    // Rough effective capacity estimation (can be refined later)
-    let effective_capacity = TARGET_VOLUME_USD * (1.0 + net_yield * 2.0); // simple heuristic
+    let effective_capacity = target_volume * (1.0 + net_yield * 2.0);
 
     Some((net_yield, effective_capacity))
 }
@@ -134,6 +140,6 @@ mod tests {
     #[test]
     fn test_net_yield_formula() {
         let net = calculate_net_yield(1.0, 1.0, 1.0015);
-        assert!(net > 0.001); // Should be positive after fees
+        assert!(net > 0.001);
     }
 }
