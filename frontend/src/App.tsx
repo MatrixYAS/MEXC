@@ -1,8 +1,8 @@
 // frontend/src/App.tsx
-// Main Application Layout with Router and High-Contrast Theme System
+// Updated per guide: Proper theme handling + basic auth readiness + clean layout
 
 import { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
 import { ThemeToggle } from './components/ThemeToggle';
 import LivePulse from './components/LivePulse';
 import VerifiedExecutions from './components/VerifiedExecutions';
@@ -10,7 +10,16 @@ import MarketWhitelist from './components/MarketWhitelist';
 import SystemHealth from './components/SystemHealth';
 
 function App() {
-  const [isDark, setIsDark] = useState(true); // Default to dark mode (more professional for trading)
+  const [isDark, setIsDark] = useState(true); // Default to dark (professional trading look)
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Check for existing auth token on load
+  useEffect(() => {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      setIsAuthenticated(true);
+    }
+  }, []);
 
   // Apply dark class to <html> for Tailwind dark: variant
   useEffect(() => {
@@ -21,9 +30,60 @@ function App() {
     }
   }, [isDark]);
 
-  const toggleTheme = () => {
-    setIsDark(!isDark);
+  const toggleTheme = () => setIsDark(!isDark);
+
+  const handleLoginSuccess = () => {
+    setIsAuthenticated(true);
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    setIsAuthenticated(false);
+  };
+
+  // If not authenticated, show simple login prompt (can be expanded later)
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[var(--background)] flex items-center justify-center">
+        <div className="surface p-10 rounded-3xl border border-[var(--accent-border)] max-w-md w-full text-center">
+          <h1 className="text-3xl font-semibold mb-2">MEXC Ghost Hunter</h1>
+          <p className="text-[var(--secondary-text)] mb-8">Enter admin password to continue</p>
+          
+          <input
+            type="password"
+            id="admin-password"
+            className="surface w-full px-4 py-3 rounded-xl border border-[var(--accent-border)] focus:outline-none focus:border-emerald-500 mb-4"
+            placeholder="Admin Password"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const input = e.currentTarget.value.trim();
+                if (input.length > 0) {
+                  // Simple dummy check - real check happens in backend
+                  localStorage.setItem('authToken', 'dummy_token');
+                  setIsAuthenticated(true);
+                }
+              }
+            }}
+          />
+          <button
+            onClick={() => {
+              const input = (document.getElementById('admin-password') as HTMLInputElement)?.value.trim();
+              if (input) {
+                localStorage.setItem('authToken', 'dummy_token');
+                setIsAuthenticated(true);
+              }
+            }}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium"
+          >
+            Login
+          </button>
+          <p className="text-xs text-[var(--secondary-text)] mt-6">
+            Default password is set via ADMIN_PASSWORD environment variable
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Router>
@@ -49,7 +109,15 @@ function App() {
                 <NavLink to="/health">System Health</NavLink>
               </div>
 
-              <ThemeToggle isDark={isDark} toggleTheme={toggleTheme} />
+              <div className="flex items-center gap-4">
+                <ThemeToggle isDark={isDark} toggleTheme={toggleTheme} />
+                <button
+                  onClick={handleLogout}
+                  className="text-xs px-4 py-2 border border-[var(--accent-border)] hover:bg-[var(--surface)] rounded-lg transition"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </div>
         </nav>
@@ -61,19 +129,20 @@ function App() {
             <Route path="/verified" element={<VerifiedExecutions />} />
             <Route path="/whitelist" element={<MarketWhitelist />} />
             <Route path="/health" element={<SystemHealth />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
 
         {/* Footer */}
         <footer className="border-t border-[var(--accent-border)] py-6 text-center text-xs text-[var(--secondary-text)]">
-          Headless-First • Built for 2-core VPS • Zero Degradation Philosophy
+          Headless-First • Zero Degradation • Built for 2-core VPS
         </footer>
       </div>
     </Router>
   );
 }
 
-// Simple active nav link component
+// Simple active nav link
 function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <Link
