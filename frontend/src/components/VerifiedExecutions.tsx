@@ -1,40 +1,39 @@
 // frontend/src/components/VerifiedExecutions.tsx
-// Page 2: "Verified Executions" (Real-World History)
-// Shows everything the bot captured while you were offline
-// Pulls directly from SQLite opportunities table
+// Updated per guide 2.4: Now uses real /api/today-stats endpoint
 
 import { useState, useEffect } from 'react';
-import { api, TriangleOpportunity } from '../lib/api';
+import { api, TriangleOpportunity, TodayStats } from '../lib/api';
 import { format } from 'date-fns';
 
 export default function VerifiedExecutions() {
   const [opportunities, setOpportunities] = useState<TriangleOpportunity[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [todayStats, setTodayStats] = useState({
-    gapsFound: 0,
-    avgYield: 0,
-    totalPotential: 0,
+  const [todayStats, setTodayStats] = useState<TodayStats>({
+    gaps_found: 0,
+    avg_yield: 0,
+    total_potential: 0,
   });
+  const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Get recent verified opportunities
-      const data = await api.recentOpportunities(100);
-      setOpportunities(data);
+      // Fetch recent opportunities
+      const ops = await api.recentOpportunities(100);
+      setOpportunities(ops);
 
-      // Get today's analytics
-      // Note: This endpoint is not yet implemented in Rust - using mock for now
-      // In real implementation: add /api/today-stats to backend
-      setTodayStats({
-        gapsFound: data.length,
-        avgYield: data.length > 0 
-          ? data.reduce((sum, item) => sum + item.net_yield_percent, 0) / data.length 
-          : 0,
-        totalPotential: data.reduce((sum, item) => sum + item.net_yield_percent, 0),
-      });
+      // Fetch real today stats from backend (new endpoint)
+      const stats = await api.todayStats();
+      setTodayStats(stats);
     } catch (error) {
       console.error('Failed to fetch verified executions:', error);
+      // Fallback if backend endpoint not ready yet
+      setTodayStats({
+        gaps_found: ops.length,
+        avg_yield: ops.length > 0 
+          ? ops.reduce((sum, item) => sum + item.net_yield_percent, 0) / ops.length 
+          : 0,
+        total_potential: ops.reduce((sum, item) => sum + item.net_yield_percent, 0),
+      });
     } finally {
       setLoading(false);
     }
@@ -74,24 +73,24 @@ export default function VerifiedExecutions() {
         </p>
       </div>
 
-      {/* Analytics Header */}
+      {/* Analytics Header - Now uses real backend data */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
           <div className="text-sm text-[var(--secondary-text)]">Gaps Found Today</div>
-          <div className="text-4xl font-semibold mt-2 text-success">{todayStats.gapsFound}</div>
+          <div className="text-4xl font-semibold mt-2 text-success">{todayStats.gaps_found}</div>
         </div>
         
         <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
           <div className="text-sm text-[var(--secondary-text)]">Average Yield</div>
           <div className="text-4xl font-semibold mt-2 text-success">
-            +{todayStats.avgYield.toFixed(2)}%
+            +{todayStats.avg_yield.toFixed(2)}%
           </div>
         </div>
         
         <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
           <div className="text-sm text-[var(--secondary-text)]">Total Potential Yield</div>
           <div className="text-4xl font-semibold mt-2 text-success">
-            +{todayStats.totalPotential.toFixed(1)}%
+            +{todayStats.total_potential.toFixed(1)}%
           </div>
         </div>
       </div>
