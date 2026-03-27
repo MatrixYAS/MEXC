@@ -1,56 +1,33 @@
 // frontend/src/components/LivePulse.tsx
-// Page 1: The "Live Pulse" (Real-Time Scanner)
-// Shows only the top 10 most profitable paths with real-time updates
+// Updated per guide 2.1: Now uses real SSE via useSSE hook (no more polling fallback)
 
 import { useState, useEffect } from 'react';
-import { api, TriangleOpportunity } from '../lib/api';
 import { useSSE } from '../hooks/useSSE';
 
-export default function LivePulse() {
-  const [topGaps, setTopGaps] = useState<TriangleOpportunity[]>([]);
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+interface Opportunity {
+  id: string;
+  path: string;
+  net_yield_percent: number;
+  capacity_usd: number;
+  gap_age_ms: number;
+  fill_score: string;
+  detected_at: string;
+}
 
-  // Use SSE for real-time updates (as per PRD)
-  const { data: liveData, isConnected } = useSSE<TriangleOpportunity[]>({
-    endpoint: '/api/live-pulse',           // TODO: Implement SSE endpoint in Rust later
+export default function LivePulse() {
+  const { data: topGaps, isConnected, error } = useSSE<Opportunity[]>({
+    endpoint: '/api/live-pulse',
     initialData: [],
   });
 
-  // Fallback: Poll every 2 seconds if SSE not yet implemented
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+
+  // Update timestamp whenever new data arrives
   useEffect(() => {
-    const fetchTopGaps = async () => {
-      try {
-        // For now we use recent opportunities as placeholder
-        const opportunities = await api.recentOpportunities(20);
-        
-        // Sort by net yield descending and take top 10
-        const sorted = [...opportunities]
-          .sort((a, b) => b.net_yield_percent - a.net_yield_percent)
-          .slice(0, 10);
-        
-        setTopGaps(sorted);
-        setLastUpdate(new Date());
-      } catch (error) {
-        console.error('Failed to fetch live gaps:', error);
-      }
-    };
-
-    fetchTopGaps();
-    const interval = setInterval(fetchTopGaps, 2000); // Update every 2s
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Update from SSE when available
-  useEffect(() => {
-    if (liveData && liveData.length > 0) {
-      const sorted = [...liveData]
-        .sort((a, b) => b.net_yield_percent - a.net_yield_percent)
-        .slice(0, 10);
-      setTopGaps(sorted);
+    if (topGaps && topGaps.length > 0) {
       setLastUpdate(new Date());
     }
-  }, [liveData]);
+  }, [topGaps]);
 
   const formatAge = (ms: number): string => {
     if (ms < 1000) return `${ms}ms`;
@@ -75,14 +52,15 @@ export default function LivePulse() {
         <div>
           <h2 className="text-3xl font-semibold tracking-tight">Live Pulse</h2>
           <p className="text-[var(--secondary-text)] mt-1">
-            Real-time triangle arbitrage opportunities • Updated every 2s
+            Real-time triangle arbitrage opportunities • Powered by SSE
           </p>
         </div>
-        
+
         <div className="flex items-center gap-3 text-sm">
           <div className={`px-3 py-1 rounded-full text-xs font-medium border ${isConnected ? 'border-emerald-500 text-emerald-500' : 'border-orange-500 text-orange-500'}`}>
-            {isConnected ? '● LIVE SSE' : '● POLLING'}
+            {isConnected ? '● LIVE SSE' : '● RECONNECTING'}
           </div>
+          {error && <div className="text-red-500 text-xs">{error}</div>}
           <div className="text-[var(--secondary-text)]">
             Last update: {lastUpdate.toLocaleTimeString()}
           </div>
@@ -101,14 +79,14 @@ export default function LivePulse() {
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--accent-border)]">
-            {topGaps.length > 0 ? (
-              topGaps.map((gap, index) => (
+            {topGaps && topGaps.length > 0 ? (
+              topGaps.map((gap) => (
                 <tr key={gap.id} className="gap-row hover:bg-[rgba(16,185,129,0.05)]">
                   <td className="px-6 py-5 font-mono text-sm font-medium">
                     {gap.path}
                   </td>
                   <td className="px-6 py-5 text-right">
-                    <span className={`text-lg font-semibold text-success number-update ${gap.net_yield_percent > 0 ? 'text-emerald-500' : ''}`}>
+                    <span className={`text-lg font-semibold text-success number-update`}>
                       +{gap.net_yield_percent.toFixed(2)}%
                     </span>
                   </td>
