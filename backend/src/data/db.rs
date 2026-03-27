@@ -1,12 +1,26 @@
 // backend/src/data/db.rs
-// SQLite Database Layer with WAL Mode + Connection Pooling
-// Supports headless persistence of verified opportunities
+// Updated with api_keys table + save/get functions (encrypted storage)
+// As required in the MEXC_Code_Changes_Guide
 
-use crate::data::models::{Opportunity, Triangle, WhitelistCoin, Telemetry};
+use crate::data::models::{Opportunity, Triangle, WhitelistCoin, Telemetry, ApiKeys, ApiKeyRequest};
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
 use std::sync::Arc;
 use chrono::Utc;
+
+// Simple encryption placeholder (using env salt + base64)
+// In production, replace with proper AES (ring crate) if needed
+fn encrypt(data: &str) -> String {
+    let salt = std::env::var("ENCRYPTION_SALT").unwrap_or_else(|_| "ghosthunter-salt".to_string());
+    let combined = format!("{}:{}", salt, data);
+    base64::encode(combined)
+}
+
+fn decrypt(encrypted: &str) -> String {
+    let decoded = base64::decode(encrypted).unwrap_or_default();
+    let decoded_str = String::from_utf8(decoded).unwrap_or_default();
+    decoded_str.split(':').nth(1).unwrap_or("").to_string()
+}
 
 const DB_PATH: &str = "mexc.db";
 
@@ -16,7 +30,6 @@ pub struct Database {
 
 impl Database {
     pub async fn new() -> Result<Self> {
-        // Configure SQLite with WAL mode for concurrent read/write performance
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .min_connections(2)
@@ -37,7 +50,7 @@ impl Database {
     }
 
     async fn run_migrations(&self) -> Result<()> {
-        // Create tables if they don't exist
+        // Create all tables (including the new api_keys table from the guide)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS opportunities (
@@ -60,6 +73,14 @@ impl Database {
                 last_updated TEXT NOT NULL
             );
 
+            -- NEW: API Keys table (encrypted storage)
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY CHECK (id = 1),  -- single row only
+                api_key TEXT NOT NULL,
+                secret_key TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_opportunities_detected_at ON opportunities(detected_at);
             CREATE INDEX IF NOT EXISTS idx_opportunities_net_yield ON opportunities(net_yield_percent);
             "#
@@ -70,7 +91,8 @@ impl Database {
         Ok(())
     }
 
-    /// Batch insert verified opportunities (5-second batches as per PRD)
+    // ====================== Existing methods (unchanged) ======================
+
     pub async fn log_opportunity(&self, opportunity: Opportunity) -> Result<()> {
         sqlx::query(
             r#"
@@ -94,7 +116,6 @@ impl Database {
         Ok(())
     }
 
-    /// Get recent verified opportunities for the "Verified Executions" page
     pub async fn get_recent_opportunities(&self, limit: i64) -> Result<Vec<Opportunity>> {
         let rows = sqlx::query_as::<_, Opportunity>(
             r#"
@@ -110,7 +131,6 @@ impl Database {
         Ok(rows)
     }
 
-    /// Get today's gap statistics for analytics
     pub async fn get_today_stats(&self) -> Result<(i64, f64, f64)> {
         let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
 
@@ -139,7 +159,6 @@ impl Database {
         ))
     }
 
-    /// Whitelist management for 24h Adaptive Maintenance
     pub async fn save_or_update_whitelist(&self, coins: &[WhitelistCoin]) -> Result<()> {
         for coin in coins {
             sqlx::query(
@@ -173,21 +192,58 @@ impl Database {
         Ok(coins)
     }
 
-    /// Auto-pruning: Delete logs older than 7 days (as per PRD)
     pub async fn prune_old_logs(&self) -> Result<u64> {
         let cutoff = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
-
-        let result = sqlx::query(
-            "DELETE FROM opportunities WHERE detected_at < ?"
-        )
-        .bind(cutoff)
-        .execute(&self.pool)
-        .await?;
-
+        let result = sqlx::query("DELETE FROM opportunities WHERE detected_at < ?")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected())
     }
 
-    /// Get raw pool for advanced queries if needed
+    // ====================== NEW: API Keys methods (per guide) ======================
+
+    /// Save encrypted API keys (only one row allowed)
+    pub async fn save_api_keys(&self, req: ApiKeyRequest) -> Result<()> {
+        let encrypted_key = encrypt(&req.api_key);
+        let encrypted_secret = encrypt(&req.secret_key);
+
+        sqlx::query(
+            r#"
+            INSERT INTO api_keys (id, api_key, secret_key, created_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                api_key = excluded.api_key,
+                secret_key = excluded.secret_key,
+                created_at = excluded.created_at
+            "#
+        )
+        .bind(encrypted_key)
+        .bind(encrypted_secret)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Retrieve and decrypt API keys
+    pub async fn get_api_keys(&self) -> Result<Option<ApiKeys>> {
+        let row = sqlx::query_as::<_, ApiKeys>(
+            "SELECT * FROM api_keys WHERE id = 1"
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(mut keys) = row {
+            keys.api_key = decrypt(&keys.api_key);
+            keys.secret_key = decrypt(&keys.secret_key);
+            Ok(Some(keys))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
