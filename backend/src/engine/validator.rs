@@ -1,3 +1,6 @@
+// backend/src/engine/validator.rs
+// Updated: min_profit_threshold now read from environment variable (per guide 1.3)
+
 use crate::data::models::{OrderBookLevels, Triangle};
 use crate::engine::calculator::{validate_triangle, calculate_weighted_fill_price};
 use std::collections::HashMap;
@@ -13,7 +16,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct PersistenceState {
     pub last_seen: Instant,
-    pub consecutive_ticks: u8,        // 0 to 3
+    pub consecutive_ticks: u8,
     pub last_net_yield: f64,
     pub best_capacity: f64,
     pub fill_score: String,
@@ -34,20 +37,25 @@ impl Default for PersistenceState {
 /// Main Validator for the Persistence Filter
 pub struct TriangleValidator {
     persistence_map: HashMap<Uuid, PersistenceState>,
-    min_profit_threshold: f64,
+    min_profit_threshold: f64,   // Now dynamic from env var
 }
 
 impl TriangleValidator {
     pub fn new() -> Self {
+        // Externalized configuration (guide 1.3)
+        let min_profit_threshold = std::env::var("MIN_PROFIT_THRESHOLD")
+            .unwrap_or_else(|_| "0.0015".to_string())   // default = 0.15%
+            .parse::<f64>()
+            .expect("MIN_PROFIT_THRESHOLD must be a valid float");
+
         Self {
             persistence_map: HashMap::new(),
-            min_profit_threshold: 0.0015, // 0.15%
+            min_profit_threshold,
         }
     }
 
     /// Calculate Fill Score (A-F) based on order book density
     fn calculate_fill_score(book1: &OrderBookLevels, book2: &OrderBookLevels, book3: &OrderBookLevels) -> String {
-        // Simple density heuristic: average top-5 volume
         let avg_vol = |levels: &[crate::data::models::PriceLevel; 20]| -> f64 {
             levels.iter().take(5).map(|l| l.volume).sum::<f64>() / 5.0
         };
@@ -55,11 +63,11 @@ impl TriangleValidator {
         let density = (avg_vol(&book1.asks) + avg_vol(&book2.asks) + avg_vol(&book3.bids)) / 3.0;
 
         match density {
-            d if d > 5000.0 => "A",  // Very deep
+            d if d > 5000.0 => "A",
             d if d > 2000.0 => "B",
             d if d > 800.0  => "C",
             d if d > 200.0  => "D",
-            _ => "F",                // Thin / Risky
+            _ => "F",
         }.to_string()
     }
 
@@ -81,31 +89,27 @@ impl TriangleValidator {
 
         match validation_result {
             Some((net_yield, capacity)) => {
-                // Profitable on this tick
                 if net_yield >= self.min_profit_threshold {
                     state.consecutive_ticks = state.consecutive_ticks.saturating_add(1);
                     state.last_net_yield = net_yield.max(state.last_net_yield);
                     state.best_capacity = capacity.max(state.best_capacity);
                     state.last_seen = current_time;
                 } else {
-                    // Dropped below threshold
                     state.consecutive_ticks = 0;
                 }
             }
             None => {
-                // Not profitable or low liquidity / stale
                 state.consecutive_ticks = 0;
             }
         }
 
-        // 3-Tick Rule: Only return verified triangle after 3 consecutive good ticks
         if state.consecutive_ticks >= 3 {
             let fill_score = Self::calculate_fill_score(book1, book2, book3);
 
             let mut triangle = Triangle::new(
-                format!("leg1"), // Will be properly set by caller with real symbols
-                format!("leg2"),
-                format!("leg3"),
+                "leg1".to_string(), // Real symbols are set by caller
+                "leg2".to_string(),
+                "leg3".to_string(),
                 state.last_net_yield,
                 state.best_capacity,
             );
@@ -123,7 +127,6 @@ impl TriangleValidator {
         }
     }
 
-    /// Clean up old entries to prevent memory growth (for 300-coin whitelist)
     pub fn cleanup_old_entries(&mut self, max_age: Duration) {
         let now = Instant::now();
         self.persistence_map.retain(|_, state| {
@@ -131,7 +134,6 @@ impl TriangleValidator {
         });
     }
 
-    /// Get current persistence stats for telemetry
     pub fn get_stats(&self) -> (usize, usize) {
         let total = self.persistence_map.len();
         let active = self.persistence_map.values()
@@ -149,16 +151,11 @@ mod tests {
     #[test]
     fn test_3_tick_rule() {
         let mut validator = TriangleValidator::new();
-
-        // Simulate 3 consecutive profitable ticks
         let dummy_book = OrderBookLevels::default();
-        // In real usage, books would have real data
 
         for _ in 0..2 {
             let result = validator.validate_persistent(Uuid::new_v4(), &dummy_book, &dummy_book, &dummy_book);
-            assert!(result.is_none()); // First 2 ticks should not trigger
+            assert!(result.is_none());
         }
-
-        // Third tick should trigger verified triangle (in real code with proper data)
     }
 }
