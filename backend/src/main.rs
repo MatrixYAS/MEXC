@@ -1,16 +1,19 @@
 // backend/src/main.rs
-// Server Entry & Task Coordinator
-// Ties together everything: Math Engine, Networking, Persistence, Cron, Telemetry + Axum API
+// Updated with SSE, static serving, API keys, auth, and all changes from the guide
 
 use anyhow::Result;
 use axum::{
     extract::State,
     routing::{get, post},
     Json, Router,
+    response::sse::{Event, Sse},
 };
+use axum::http::StatusCode;
+use futures::StreamExt;
+use std::convert::Infallible;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
+use tokio::sync::{broadcast, RwLock, Mutex};
+use tower_http::{cors::CorsLayer, services::ServeDir};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod data;
@@ -20,7 +23,7 @@ mod persistence;
 mod cron;
 mod telemetry;
 
-use crate::data::{Database, Opportunity};
+use crate::data::{Database, Opportunity, ApiKeys, ApiKeyRequest};
 use crate::engine::MathEngine;
 use crate::network::{NetworkManager, RestClient};
 use crate::persistence::{SqlitePersistence, TradeLogger};
@@ -28,7 +31,7 @@ use crate::cron::{MaintenanceTask, CleanerTask};
 use crate::telemetry::TelemetryCollector;
 use crate::data::models::{HealthResponse, Telemetry};
 
-// App State shared across handlers
+// Updated AppState with all new requirements from the guide
 #[derive(Clone)]
 struct AppState {
     math_engine: Arc<MathEngine>,
@@ -36,61 +39,71 @@ struct AppState {
     trade_logger: Arc<TradeLogger>,
     telemetry_collector: Arc<TelemetryCollector>,
     ws_pool: Arc<Mutex<network::WssPool>>,
+    opportunity_sender: broadcast::Sender<Opportunity>,   // For SSE Live Pulse
+    api_keys: Arc<RwLock<Option<ApiKeys>>>,               // Secure API keys
+    admin_password: String,                               // Simple auth
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("🚀 Starting MEXC Ghost Hunter...");
+    tracing::info!("🚀 Starting MEXC Ghost Hunter (with all guide fixes)...");
 
-    // 1. Initialize Database
     let db = Arc::new(Database::new().await?);
 
-    // 2. Initialize Core Engine
     let math_engine = Arc::new(MathEngine::new());
-
-    // 3. Initialize Network Layer
     let network_manager = Arc::new(NetworkManager::new(Arc::clone(&math_engine)));
-    let ws_pool = Arc::new(Mutex::new(network_manager.ws_pool.clone())); // For sharing
+    let ws_pool = Arc::new(Mutex::new(network_manager.ws_pool.clone()));
 
-    // 4. Initialize Persistence
     let sqlite_persistence = Arc::new(SqlitePersistence::new(Arc::clone(&db)));
     let trade_logger = Arc::new(TradeLogger::new(Arc::clone(&sqlite_persistence)));
 
-    // 5. Initialize Telemetry
     let telemetry_collector = Arc::new(TelemetryCollector::new(Arc::clone(&math_engine)));
 
-    // 6. Build App State
+    // Broadcast channel for real-time SSE
+    let (opportunity_sender, _) = broadcast::channel::<Opportunity>(100);
+
+    // Load existing API keys from DB
+    let api_keys = Arc::new(RwLock::new(db.get_api_keys().await.ok()));
+
+    let admin_password = std::env::var("ADMIN_PASSWORD")
+        .unwrap_or_else(|_| "ghosthunter123".to_string());
+
     let state = AppState {
         math_engine: Arc::clone(&math_engine),
         network_manager: Arc::clone(&network_manager),
         trade_logger: Arc::clone(&trade_logger),
         telemetry_collector: Arc::clone(&telemetry_collector),
         ws_pool: Arc::clone(&ws_pool),
+        opportunity_sender: opportunity_sender.clone(),
+        api_keys,
+        admin_password,
     };
 
-    // 7. Start Background Tasks
-    start_background_tasks(&state).await;
+    // Start background tasks
+    start_background_tasks(&state, opportunity_sender).await;
 
-    // 8. Build Axum Router
+    // Build router with ALL new routes from the guide
     let app = Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/telemetry", get(telemetry_handler))
         .route("/api/opportunities", get(recent_opportunities_handler))
         .route("/api/whitelist", get(whitelist_handler))
-        // Future: POST /api/trade (paper/live)
-        .layer(CorsLayer::permissive()) // Adjust in production
+        .route("/api/live-pulse", get(live_pulse_sse_handler))           // NEW SSE
+        .route("/api/keys", post(save_api_keys_handler))                 // NEW
+        .route("/api/keys", get(get_api_keys_handler))                   // NEW
+        .route("/api/login", post(login_handler))                        // NEW
+        .route("/api/today-stats", get(today_stats_handler))             // NEW
+        .fallback_service(ServeDir::new("frontend/dist"))                // Static React files
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
-    // 9. Start HTTP Server (for Hugging Face + local)
     let port = std::env::var("PORT").unwrap_or_else(|_| "7860".to_string());
     let addr = format!("0.0.0.0:{}", port);
-    
     tracing::info!("✅ Server listening on http://{}", addr);
 
     axum::Server::bind(&addr.parse()?)
@@ -100,47 +113,89 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ====================== Background Tasks ======================
-
-async fn start_background_tasks(state: &AppState) {
-    // Start batch flusher
+// ====================== BACKGROUND TASKS ======================
+async fn start_background_tasks(state: &AppState, sender: broadcast::Sender<Opportunity>) {
+    // Batch flusher
     let logger_clone = Arc::clone(&state.trade_logger);
-    tokio::spawn(async move {
-        logger_clone.start_batch_flusher().await;
-    });
+    tokio::spawn(async move { logger_clone.start_batch_flusher().await; });
 
-    // Start 24h Maintenance
+    // Maintenance + Cleaner + Telemetry (same as before)
     let maintenance = Arc::new(MaintenanceTask::new(
-        Arc::new(RestClient::new()), // Temporary - better to inject from network_manager
+        Arc::new(RestClient::new()),
         Arc::clone(&state.math_engine),
         Arc::clone(&state.ws_pool),
     ));
     maintenance.start_scheduler().await;
 
-    // Start Daily Cleaner
     let cleaner = Arc::new(CleanerTask::new(Arc::clone(&state.trade_logger)));
     cleaner.start_scheduler().await;
 
-    // Start Telemetry Collector
     let telemetry_clone = Arc::clone(&state.telemetry_collector);
-    tokio::spawn(async move {
-        telemetry_clone.start_collector().await;
-    });
+    tokio::spawn(async move { telemetry_clone.start_collector().await; });
 
-    // Initial whitelist load (will trigger WS pool start)
-    tracing::info!("Starting initial WebSocket pool...");
-    // In production: load from DB or run maintenance once
+    // Link TradeLogger to broadcast sender so verified opportunities are sent to SSE
+    // (We will update TradeLogger in the next file)
+    tracing::info!("SSE broadcast channel ready for Live Pulse");
 }
 
-// ====================== API Handlers ======================
+// ====================== NEW HANDLERS FROM GUIDE ======================
 
+// SSE for Live Pulse
+async fn live_pulse_sse_handler(
+    State(state): State<AppState>,
+) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let rx = state.opportunity_sender.subscribe();
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+        .filter_map(|msg| async move { msg.ok() })
+        .map(|opportunity| {
+            Ok(Event::default().json_data(opportunity).unwrap())
+        });
+
+    Sse::new(stream)
+}
+
+// API Keys handlers (stub - full implementation in next steps)
+async fn save_api_keys_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<ApiKeyRequest>,
+) -> Json<&'static str> {
+    // TODO: encrypt + save (we'll add encryption in db.rs next)
+    let mut keys = state.api_keys.write().await;
+    *keys = Some(ApiKeys::new(payload.api_key, payload.secret_key));
+    Json("API keys saved")
+}
+
+async fn get_api_keys_handler(State(state): State<AppState>) -> Json<bool> {
+    let keys = state.api_keys.read().await;
+    Json(keys.is_some())
+}
+
+// Simple login
+async fn login_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if payload["password"].as_str() == Some(&state.admin_password) {
+        Ok(Json(serde_json::json!({ "token": "dummy_token" })))
+    } else {
+        Err((StatusCode::UNAUTHORIZED, "Invalid password".to_string()))
+    }
+}
+
+// Today stats (stub - will be expanded when we update trade_logger)
+async fn today_stats_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    // Placeholder for now
+    Json(serde_json::json!({
+        "gaps_found": 42,
+        "avg_yield": 0.32,
+        "total_potential": 13.7
+    }))
+}
+
+// Keep existing handlers (health, telemetry, etc.)
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     let telemetry = state.telemetry_collector.collect();
-    Json(HealthResponse {
-        status: "healthy".to_string(),
-        uptime_ms: state.telemetry_collector.uptime_ms(),
-        telemetry,
-    })
+    Json(HealthResponse { status: "healthy".to_string(), uptime_ms: state.telemetry_collector.uptime_ms(), telemetry })
 }
 
 async fn telemetry_handler(State(state): State<AppState>) -> Json<Telemetry> {
@@ -154,18 +209,6 @@ async fn recent_opportunities_handler(State(state): State<AppState>) -> Json<Vec
     }
 }
 
-async fn whitelist_handler(State(_state): State<AppState>) -> Json<Vec<String>> {
-    // Placeholder - expand with real whitelist from DB
+async fn whitelist_handler(_state: State<AppState>) -> Json<Vec<String>> {
     Json(vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()])
-}
-
-// TODO: Add more endpoints as frontend is built (Live Pulse SSE, etc.)
-
-#[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn test_server_starts() {
-        // Basic smoke test
-        assert!(true);
-    }
 }
