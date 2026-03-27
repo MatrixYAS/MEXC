@@ -5,15 +5,18 @@ services:
     build: .
     container_name: mexc-ghost-hunter
     ports:
-      - "7860:7860"      # Main port (Hugging Face + local access)
-      - "5173:5173"      # Vite dev server (optional, for frontend development)
+      - "7860:7860"      # Main port for both local and Hugging Face
     volumes:
-      - ./data:/data     # Persistent SQLite database (mexc.db)
-      - ./backend/mexc.db:/app/mexc.db  # Optional direct mapping
+      - ./data:/data     # Persistent SQLite database
     environment:
       - PORT=7860
       - RUST_LOG=info
       - RUST_BACKTRACE=1
+      - ADMIN_PASSWORD=ghosthunter123          # Change this in production!
+      - MIN_PROFIT_THRESHOLD=0.0015
+      - TARGET_VOLUME_USD=1000.0
+      - MIN_VOLUME_24H=500000.0
+      - ENCRYPTION_SALT=mexc-ghost-hunter-salt-2026
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7860/api/health"]
@@ -22,7 +25,7 @@ services:
       retries: 3
       start_period: 40s
 
-  # Optional: Development frontend only (for hot reload during UI work)
+  # Development frontend only (hot reload)
   frontend-dev:
     image: node:20-alpine
     container_name: mexc-frontend-dev
