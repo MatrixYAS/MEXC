@@ -1,3 +1,6 @@
+// backend/src/data/models.rs
+// Updated with ApiKeys and ApiKeyRequest as required by the guide
+
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
@@ -8,7 +11,6 @@ use chrono::{DateTime, Utc};
 // Order Book Models (Performance Critical)
 // =============================================
 
-/// Fixed-size array for top 20 price levels to avoid heap allocation in hot path
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceLevel {
     pub price: f64,
@@ -21,13 +23,12 @@ impl Default for PriceLevel {
     }
 }
 
-/// Stack-allocated top 20 levels of the order book (as specified in PRD)
 #[derive(Debug, Clone, Copy)]
 pub struct OrderBookLevels {
     pub bids: [PriceLevel; 20],
     pub asks: [PriceLevel; 20],
     pub last_update_time: DateTime<Utc>,
-    pub symbol: [u8; 16], // Short symbol storage for performance
+    pub symbol: [u8; 16],
 }
 
 impl Default for OrderBookLevels {
@@ -59,15 +60,15 @@ impl OrderBookLevels {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Triangle {
     pub id: Uuid,
-    pub leg1: String,   // e.g. "USDT_BTC"
-    pub leg2: String,   // e.g. "BTC_PEPE"
-    pub leg3: String,   // e.g. "PEPE_USDT"
-    pub net_yield: f64, // after fees & slippage
-    pub effective_capacity: f64, // max USD before profit < 0.1%
+    pub leg1: String,
+    pub leg2: String,
+    pub leg3: String,
+    pub net_yield: f64,
+    pub effective_capacity: f64,
     pub gap_age_ms: i64,
-    pub fill_score: String, // "A", "B", "C", "D", "F"
+    pub fill_score: String,
     pub created_at: DateTime<Utc>,
-    pub is_verified: bool, // passed 3-tick + weighted fill
+    pub is_verified: bool,
 }
 
 impl Triangle {
@@ -111,7 +112,7 @@ pub struct Opportunity {
     pub gap_age_ms: i64,
     pub fill_score: String,
     pub detected_at: DateTime<Utc>,
-    pub is_executed: bool, // future paper/live flag
+    pub is_executed: bool,
 }
 
 impl Opportunity {
@@ -131,7 +132,7 @@ impl Opportunity {
 }
 
 // =============================================
-// Whitelist Coin Model (Adaptive Maintenance)
+// Whitelist Coin Model
 // =============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -156,6 +157,35 @@ impl WhitelistCoin {
 }
 
 // =============================================
+// NEW: API Keys (Secure storage - per guide)
+// =============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ApiKeys {
+    pub id: i64,
+    pub api_key: String,
+    pub secret_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl ApiKeys {
+    pub fn new(api_key: String, secret_key: String) -> Self {
+        Self {
+            id: 1, // single row for simplicity
+            api_key,
+            secret_key,
+            created_at: Utc::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyRequest {
+    pub api_key: String,
+    pub secret_key: String,
+}
+
+// =============================================
 // Telemetry & System Health
 // =============================================
 
@@ -175,3 +205,6 @@ pub struct HealthResponse {
     pub uptime_ms: i64,
     pub telemetry: Telemetry,
 }
+
+// Re-export everything for clean usage
+pub use crate::data::models::PriceLevel; // already defined above
