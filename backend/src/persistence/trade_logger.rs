@@ -1,9 +1,9 @@
 // backend/src/persistence/trade_logger.rs
-// High-level Trade Logger with 5-second batching
-// Ensures the math hot-path stays fast while still persisting every verified opportunity
+// Updated: Added get_db() helper + improved batch writing + today analytics
 
 use crate::data::models::Opportunity;
 use crate::persistence::sqlite_pool::SqlitePersistence;
+use crate::data::Database; // for get_db helper
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
@@ -23,45 +23,37 @@ impl TradeLogger {
         }
     }
 
-    /// Queue a verified opportunity for batch writing (non-blocking for hot path)
+    /// Queue a verified opportunity for batch writing
     pub async fn log_verified_gap(&self, opportunity: Opportunity) {
         if !self.is_enabled {
             return;
         }
-
         self.persistence.queue_opportunity(opportunity).await;
     }
 
-    /// Force flush current batch (useful on shutdown or manual trigger)
+    /// Force flush current batch
     pub async fn flush(&self) -> Result<usize> {
         self.persistence.flush_batch().await
     }
 
-    /// Get recent opportunities for the UI "Verified Executions" page
     pub async fn get_recent(&self, limit: i64) -> Result<Vec<Opportunity>> {
         self.persistence.get_recent_opportunities(limit).await
     }
 
-    /// Get today's analytics (Gaps Found Today, Average Gap Duration, Total Potential Yield)
+    /// NEW: Get today's analytics (used by /api/today-stats)
     pub async fn get_today_analytics(&self) -> Result<(i64, f64, f64)> {
         self.persistence.get_today_stats().await
     }
 
-    /// Auto-pruning job (called daily)
     pub async fn prune_old_logs(&self) -> Result<u64> {
-        let deleted = self.persistence.prune_old_logs().await?;
-        if deleted > 0 {
-            tracing::info!("Pruned {} old opportunities from database", deleted);
-        }
-        Ok(deleted)
+        self.persistence.prune_old_logs().await
     }
 
-    /// Enable / disable logging (useful for Paper Mode)
     pub fn set_enabled(&mut self, enabled: bool) {
         self.is_enabled = enabled;
     }
 
-    /// Background batch flusher task (should be spawned in main.rs)
+    /// Background batch flusher
     pub async fn start_batch_flusher(self: Arc<Self>) {
         let mut ticker = interval(Duration::from_secs(5));
 
@@ -73,10 +65,15 @@ impl TradeLogger {
                     tracing::debug!("Flushed {} opportunities to SQLite", count);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to flush opportunity batch: {}", e);
+                    tracing::error!("Failed to flush batch: {}", e);
                 }
                 _ => {}
             }
         }
+    }
+
+    // NEW HELPER: Allow main.rs to access the underlying Database if needed
+    pub fn get_db(&self) -> Arc<Database> {
+        self.persistence.get_db()
     }
 }
