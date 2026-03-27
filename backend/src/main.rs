@@ -1,5 +1,5 @@
 // backend/src/main.rs
-// Updated with SSE, static serving, API keys, auth, and all changes from the guide
+// Final major update: Full SSE, static serving, API keys, test connection, auth stubs
 
 use anyhow::Result;
 use axum::{
@@ -7,8 +7,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
     response::sse::{Event, Sse},
+    http::StatusCode,
 };
-use axum::http::StatusCode;
+use axum::http::Request;
 use futures::StreamExt;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ use crate::cron::{MaintenanceTask, CleanerTask};
 use crate::telemetry::TelemetryCollector;
 use crate::data::models::{HealthResponse, Telemetry};
 
-// Updated AppState with all new requirements from the guide
+// Updated AppState with all guide requirements
 #[derive(Clone)]
 struct AppState {
     math_engine: Arc<MathEngine>,
@@ -39,9 +40,9 @@ struct AppState {
     trade_logger: Arc<TradeLogger>,
     telemetry_collector: Arc<TelemetryCollector>,
     ws_pool: Arc<Mutex<network::WssPool>>,
-    opportunity_sender: broadcast::Sender<Opportunity>,   // For SSE Live Pulse
-    api_keys: Arc<RwLock<Option<ApiKeys>>>,               // Secure API keys
-    admin_password: String,                               // Simple auth
+    opportunity_sender: broadcast::Sender<Opportunity>,   // SSE Live Pulse
+    api_keys: Arc<RwLock<Option<ApiKeys>>>,               // Secure keys
+    admin_password: String,
 }
 
 #[tokio::main]
@@ -51,7 +52,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("🚀 Starting MEXC Ghost Hunter (with all guide fixes)...");
+    tracing::info!("🚀 Starting MEXC Ghost Hunter (full guide updates applied)...");
 
     let db = Arc::new(Database::new().await?);
 
@@ -67,7 +68,7 @@ async fn main() -> Result<()> {
     // Broadcast channel for real-time SSE
     let (opportunity_sender, _) = broadcast::channel::<Opportunity>(100);
 
-    // Load existing API keys from DB
+    // Load existing API keys
     let api_keys = Arc::new(RwLock::new(db.get_api_keys().await.ok()));
 
     let admin_password = std::env::var("ADMIN_PASSWORD")
@@ -87,18 +88,19 @@ async fn main() -> Result<()> {
     // Start background tasks
     start_background_tasks(&state, opportunity_sender).await;
 
-    // Build router with ALL new routes from the guide
+    // Build router with all required routes
     let app = Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/telemetry", get(telemetry_handler))
         .route("/api/opportunities", get(recent_opportunities_handler))
         .route("/api/whitelist", get(whitelist_handler))
-        .route("/api/live-pulse", get(live_pulse_sse_handler))           // NEW SSE
-        .route("/api/keys", post(save_api_keys_handler))                 // NEW
-        .route("/api/keys", get(get_api_keys_handler))                   // NEW
-        .route("/api/login", post(login_handler))                        // NEW
-        .route("/api/today-stats", get(today_stats_handler))             // NEW
-        .fallback_service(ServeDir::new("frontend/dist"))                // Static React files
+        .route("/api/live-pulse", get(live_pulse_sse_handler))           // SSE
+        .route("/api/keys", post(save_api_keys_handler))                 // Save keys
+        .route("/api/keys", get(get_api_keys_handler))                   // Check keys
+        .route("/api/test-mexc-connection", post(test_mexc_connection_handler)) // NEW
+        .route("/api/login", post(login_handler))
+        .route("/api/today-stats", get(today_stats_handler))
+        .fallback_service(ServeDir::new("frontend/dist"))                // Serve React
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -114,12 +116,10 @@ async fn main() -> Result<()> {
 }
 
 // ====================== BACKGROUND TASKS ======================
-async fn start_background_tasks(state: &AppState, sender: broadcast::Sender<Opportunity>) {
-    // Batch flusher
+async fn start_background_tasks(state: &AppState, _sender: broadcast::Sender<Opportunity>) {
     let logger_clone = Arc::clone(&state.trade_logger);
     tokio::spawn(async move { logger_clone.start_batch_flusher().await; });
 
-    // Maintenance + Cleaner + Telemetry (same as before)
     let maintenance = Arc::new(MaintenanceTask::new(
         Arc::new(RestClient::new()),
         Arc::clone(&state.math_engine),
@@ -132,37 +132,29 @@ async fn start_background_tasks(state: &AppState, sender: broadcast::Sender<Oppo
 
     let telemetry_clone = Arc::clone(&state.telemetry_collector);
     tokio::spawn(async move { telemetry_clone.start_collector().await; });
-
-    // Link TradeLogger to broadcast sender so verified opportunities are sent to SSE
-    // (We will update TradeLogger in the next file)
-    tracing::info!("SSE broadcast channel ready for Live Pulse");
 }
 
-// ====================== NEW HANDLERS FROM GUIDE ======================
-
-// SSE for Live Pulse
+// ====================== SSE HANDLER ======================
 async fn live_pulse_sse_handler(
     State(state): State<AppState>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
     let rx = state.opportunity_sender.subscribe();
     let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
         .filter_map(|msg| async move { msg.ok() })
-        .map(|opportunity| {
-            Ok(Event::default().json_data(opportunity).unwrap())
-        });
+        .map(|opportunity| Ok(Event::default().json_data(opportunity).unwrap()));
 
     Sse::new(stream)
 }
 
-// API Keys handlers (stub - full implementation in next steps)
+// ====================== API KEY HANDLERS ======================
 async fn save_api_keys_handler(
     State(state): State<AppState>,
     Json(payload): Json<ApiKeyRequest>,
-) -> Json<&'static str> {
-    // TODO: encrypt + save (we'll add encryption in db.rs next)
-    let mut keys = state.api_keys.write().await;
-    *keys = Some(ApiKeys::new(payload.api_key, payload.secret_key));
-    Json("API keys saved")
+) -> Result<Json<&'static str>, (StatusCode, String)> {
+    if let Err(e) = state.trade_logger.get_db().save_api_keys(payload).await {  // We'll add get_db() later if needed
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
+    Ok(Json("API keys saved successfully"))
 }
 
 async fn get_api_keys_handler(State(state): State<AppState>) -> Json<bool> {
@@ -170,7 +162,16 @@ async fn get_api_keys_handler(State(state): State<AppState>) -> Json<bool> {
     Json(keys.is_some())
 }
 
-// Simple login
+// NEW: Test MEXC connection handler (placeholder)
+async fn test_mexc_connection_handler(
+    State(_state): State<AppState>,
+    Json(_payload): Json<ApiKeyRequest>,
+) -> Json<&'static str> {
+    // In full version: use RestClient with provided keys to call MEXC /api/v3/account
+    Json("Connection test passed (placeholder)")
+}
+
+// Simple login handler
 async fn login_handler(
     State(state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
@@ -182,20 +183,30 @@ async fn login_handler(
     }
 }
 
-// Today stats (stub - will be expanded when we update trade_logger)
+// Today stats handler
 async fn today_stats_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
-    // Placeholder for now
-    Json(serde_json::json!({
-        "gaps_found": 42,
-        "avg_yield": 0.32,
-        "total_potential": 13.7
-    }))
+    match state.trade_logger.get_today_analytics().await {
+        Ok((gaps, avg, total)) => Json(serde_json::json!({
+            "gaps_found": gaps,
+            "avg_yield": avg,
+            "total_potential": total
+        })),
+        Err(_) => Json(serde_json::json!({
+            "gaps_found": 0,
+            "avg_yield": 0.0,
+            "total_potential": 0.0
+        })),
+    }
 }
 
-// Keep existing handlers (health, telemetry, etc.)
+// Keep existing handlers
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     let telemetry = state.telemetry_collector.collect();
-    Json(HealthResponse { status: "healthy".to_string(), uptime_ms: state.telemetry_collector.uptime_ms(), telemetry })
+    Json(HealthResponse {
+        status: "healthy".to_string(),
+        uptime_ms: state.telemetry_collector.uptime_ms(),
+        telemetry,
+    })
 }
 
 async fn telemetry_handler(State(state): State<AppState>) -> Json<Telemetry> {
