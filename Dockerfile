@@ -1,6 +1,6 @@
 # =============================================
-# MEXC Ghost Hunter - Multi-stage Dockerfile
-# Optimized for Hugging Face Spaces (port 7860) + 2-core VPS
+# MEXC Ghost Hunter - Final Dockerfile (per guide)
+# Optimized for Hugging Face Spaces + 2-core VPS
 # =============================================
 
 # === Stage 1: Build React Frontend ===
@@ -8,7 +8,6 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy frontend files
 COPY frontend/package*.json ./
 RUN npm ci --only=production
 
@@ -20,19 +19,17 @@ FROM rust:1.80-alpine AS rust-builder
 
 WORKDIR /app/backend
 
-# Install system dependencies
+# System dependencies
 RUN apk add --no-cache musl-dev openssl-dev pkgconfig
 
-# Copy Cargo files first for better caching
+# Cache dependencies
 COPY backend/Cargo.toml backend/Cargo.lock* ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
 RUN rm -rf src
 
-# Copy actual source code
+# Copy source and build
 COPY backend/ ./
-
-# Build optimized release binary
 RUN cargo build --release
 
 # === Stage 3: Final Runtime Image ===
@@ -40,28 +37,33 @@ FROM rust:1.80-alpine AS runtime
 
 WORKDIR /app
 
-# Install minimal runtime dependencies
+# Runtime dependencies
 RUN apk add --no-cache ca-certificates libssl3
 
 # Copy Rust binary
 COPY --from=rust-builder /app/backend/target/release/mexc-ghost-hunter /usr/local/bin/mexc-ghost-hunter
 
-# Copy built React frontend (static files)
+# Copy built React frontend
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
-# Copy SQLite database directory (will be mounted as volume)
-RUN mkdir -p /data
+# Create persistent data directory + empty DB placeholder
+RUN mkdir -p /data && touch /data/mexc.db
 
-# Expose port for Hugging Face (7860) and general use
+# Expose port for Hugging Face
 EXPOSE 7860
 
-# Set environment variables
+# Environment variables (can be overridden in Hugging Face settings)
 ENV PORT=7860
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=1
+ENV ADMIN_PASSWORD=ghosthunter123
+ENV MIN_PROFIT_THRESHOLD=0.0015
+ENV TARGET_VOLUME_USD=1000.0
+ENV MIN_VOLUME_24H=500000.0
+ENV ENCRYPTION_SALT=mexc-ghost-hunter-salt-2026
 
-# Create a volume for persistent SQLite database
+# Volume for persistent SQLite database
 VOLUME ["/data"]
 
-# Run the Rust binary (it serves both API and static React files)
+# Run the application
 CMD ["mexc-ghost-hunter"]
