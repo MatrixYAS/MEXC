@@ -33,12 +33,11 @@ COPY backend/ ./
 RUN cargo build --release
 
 # === Stage 3: Final Runtime Image ===
-FROM rust:1.80-alpine AS runtime
-
+FROM alpine:3.20 AS runtime
 WORKDIR /app
 
 # Runtime dependencies
-RUN apk add --no-cache ca-certificates libssl3
+RUN apk add --no-cache ca-certificates libssl3 sqlite-libs
 
 # Copy Rust binary
 COPY --from=rust-builder /app/backend/target/release/mexc-ghost-hunter /usr/local/bin/mexc-ghost-hunter
