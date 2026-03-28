@@ -2,7 +2,6 @@
 // Updated with DashMap for high-performance order book updates (no full clone on every tick)
 
 use crate::data::models::{OrderBookLevels, Triangle};
-use crate::engine::calculator::validate_triangle;
 use crate::engine::validator::TriangleValidator;
 use dashmap::DashMap;
 use std::sync::Arc;
