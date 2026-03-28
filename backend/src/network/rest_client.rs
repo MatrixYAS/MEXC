@@ -3,7 +3,6 @@
 // As specified in the PRD: Hard-capped at 15 requests/second for safety
 
 use governor::{Quota, RateLimiter, Jitter, clock::DefaultClock, middleware::NoOpMiddleware, state::InMemoryState};
-use nonzero_ext::nonzero;
 use reqwest::{Client, Response};
 use std::sync::Arc;
 use std::time::Duration;
