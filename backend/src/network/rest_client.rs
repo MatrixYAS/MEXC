@@ -4,7 +4,6 @@
 
 use governor::{Quota, RateLimiter, Jitter, clock::DefaultClock, middleware::NoOpMiddleware, state::InMemoryState};
 use reqwest::{Client, Response};
-use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use serde::de::DeserializeOwned;
