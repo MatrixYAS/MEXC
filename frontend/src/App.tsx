@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-// Updated per guide: Proper theme handling + basic auth readiness + clean layout
+// Fixed: Real login calling backend /api/login + proper auth flow
 
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
@@ -10,8 +10,11 @@ import MarketWhitelist from './components/MarketWhitelist';
 import SystemHealth from './components/SystemHealth';
 
 function App() {
-  const [isDark, setIsDark] = useState(true); // Default to dark (professional trading look)
+  const [isDark, setIsDark] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
 
   // Check for existing auth token on load
   useEffect(() => {
@@ -21,7 +24,7 @@ function App() {
     }
   }, []);
 
-  // Apply dark class to <html> for Tailwind dark: variant
+  // Apply dark class
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add('dark');
@@ -32,8 +35,32 @@ function App() {
 
   const toggleTheme = () => setIsDark(!isDark);
 
-  const handleLoginSuccess = () => {
-    setIsAuthenticated(true);
+  const handleLogin = async () => {
+    if (!passwordInput.trim()) return;
+
+    setLoginLoading(true);
+    setLoginError('');
+
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput }),
+      });
+
+      if (res.ok) {
+        localStorage.setItem('authToken', 'authenticated');
+        setIsAuthenticated(true);
+        setPasswordInput('');
+      } else {
+        setLoginError('Invalid password. Try again.');
+      }
+    } catch (err) {
+      setLoginError('Cannot reach server. Is the backend running?');
+      console.error(err);
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -41,7 +68,7 @@ function App() {
     setIsAuthenticated(false);
   };
 
-  // If not authenticated, show simple login prompt (can be expanded later)
+  // Login screen
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[var(--background)] flex items-center justify-center">
@@ -51,34 +78,27 @@ function App() {
           
           <input
             type="password"
-            id="admin-password"
+            value={passwordInput}
+            onChange={(e) => setPasswordInput(e.target.value)}
             className="surface w-full px-4 py-3 rounded-xl border border-[var(--accent-border)] focus:outline-none focus:border-emerald-500 mb-4"
             placeholder="Admin Password"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const input = e.currentTarget.value.trim();
-                if (input.length > 0) {
-                  // Simple dummy check - real check happens in backend
-                  localStorage.setItem('authToken', 'dummy_token');
-                  setIsAuthenticated(true);
-                }
-              }
-            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
           />
+          
+          {loginError && (
+            <p className="text-red-500 text-sm mb-3">{loginError}</p>
+          )}
+
           <button
-            onClick={() => {
-              const input = (document.getElementById('admin-password') as HTMLInputElement)?.value.trim();
-              if (input) {
-                localStorage.setItem('authToken', 'dummy_token');
-                setIsAuthenticated(true);
-              }
-            }}
-            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium"
+            onClick={handleLogin}
+            disabled={loginLoading}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white rounded-xl font-medium transition"
           >
-            Login
+            {loginLoading ? 'Verifying...' : 'Login'}
           </button>
+
           <p className="text-xs text-[var(--secondary-text)] mt-6">
-            Default password is set via ADMIN_PASSWORD environment variable
+            Password is set via ADMIN_PASSWORD environment variable
           </p>
         </div>
       </div>
@@ -88,7 +108,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-[var(--background)] text-[var(--primary-text)] transition-colors duration-150">
-        {/* Top Navigation Bar */}
+        {/* Navigation Bar */}
         <nav className="surface border-b border-[var(--accent-border)] sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -122,7 +142,6 @@ function App() {
           </div>
         </nav>
 
-        {/* Main Content */}
         <main className="max-w-7xl mx-auto px-6 py-8">
           <Routes>
             <Route path="/" element={<LivePulse />} />
@@ -133,7 +152,6 @@ function App() {
           </Routes>
         </main>
 
-        {/* Footer */}
         <footer className="border-t border-[var(--accent-border)] py-6 text-center text-xs text-[var(--secondary-text)]">
           Headless-First • Zero Degradation • Built for 2-core VPS
         </footer>
@@ -142,7 +160,6 @@ function App() {
   );
 }
 
-// Simple active nav link
 function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <Link
