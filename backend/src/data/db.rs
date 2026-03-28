@@ -33,7 +33,7 @@ fn decrypt(encrypted: &str) -> String {
     String::from_utf8(decrypted).unwrap_or_default()
 }
 
-const DB_PATH: &str = "mexc.db";
+const DB_PATH: &str = "/data/mexc.db";
 
 pub struct Database {
     pool: SqlitePool,
