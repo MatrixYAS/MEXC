@@ -2,10 +2,9 @@
 // Final update: Improved API key encryption, added get_db helper for main.rs, and full migrations
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use crate::data::models::{Opportunity, Triangle, WhitelistCoin, ApiKeys, ApiKeyRequest};
+use crate::data::models::{Opportunity, ApiKeys, ApiKeyRequest};
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
-use std::sync::Arc;
 use chrono::Utc;
 
 // Improved encryption using simple XOR + base64 (better than plain base64)
