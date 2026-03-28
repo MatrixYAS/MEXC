@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     let telemetry_collector = Arc::new(TelemetryCollector::new(Arc::clone(&math_engine)));
 
     let (opportunity_sender, _) = broadcast::channel::<Opportunity>(100);
-    let api_keys = Arc::new(RwLock::new(db.get_api_keys().await.ok()));
+    let api_keys = Arc::new(RwLock::new(db.get_api_keys().await.ok().flatten()));
 
     let admin_password = std::env::var("ADMIN_PASSWORD")
         .unwrap_or_else(|_| "ghosthunter123".to_string());
