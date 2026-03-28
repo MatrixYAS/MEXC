@@ -2,7 +2,6 @@
 // Updated: TARGET_VOLUME_USD is now read from environment variable (per guide 1.3)
 
 use crate::data::models::{OrderBookLevels, PriceLevel};
-use chrono::Utc;
 
 /// Core Math Engine - Real-World Weighted Average Fill + Triple-Tax Net Profit
 ///
