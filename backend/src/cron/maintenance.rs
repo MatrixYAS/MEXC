@@ -1,7 +1,6 @@
 // backend/src/cron/maintenance.rs
 // Final update per guide 1.8: Full 24h Volume fetch + better Closed Loop validation
 
-use crate::data::models::WhitelistCoin;
 use crate::network::RestClient;
 use crate::network::WssPool;
 use crate::engine::MathEngine;
