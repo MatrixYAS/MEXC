@@ -209,8 +209,11 @@ async fn recent_opportunities_handler(State(state): State<AppState>) -> Json<Vec
 }
 
 async fn whitelist_handler(State(state): State<AppState>) -> Json<Vec<String>> {
-    let books = state.math_engine.order_books.load();
-    let mut symbols: Vec<String> = books.keys().cloned().collect();
+    let mut symbols: Vec<String> = state.math_engine.order_books
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
     symbols.sort();
     Json(symbols)
+}
 }
