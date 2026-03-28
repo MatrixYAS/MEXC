@@ -22,14 +22,16 @@ impl SqlitePersistence {
 
     /// Add opportunity to batch (very cheap - called from hot path)
     pub async fn queue_opportunity(&self, opportunity: Opportunity) {
+    let should_flush = {
         let mut buffer = self.batch_buffer.lock().await;
         buffer.push(opportunity);
+        buffer.len() > 80
+    }; // lock is DROPPED here before flush
 
-        // Auto-flush if buffer gets too large
-        if buffer.len() > 80 {
-            let _ = self.flush_batch().await;
-        }
+    if should_flush {
+        let _ = self.flush_batch().await;
     }
+}
 
     /// Flush batch to SQLite
     pub async fn flush_batch(&self) -> Result<usize> {
