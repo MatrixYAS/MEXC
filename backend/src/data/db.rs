@@ -1,6 +1,7 @@
 // backend/src/data/db.rs
 // Final update: Improved API key encryption, added get_db helper for main.rs, and full migrations
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use crate::data::models::{Opportunity, Triangle, WhitelistCoin, ApiKeys, ApiKeyRequest};
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
