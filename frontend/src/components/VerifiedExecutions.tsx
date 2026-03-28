@@ -1,32 +1,33 @@
 // frontend/src/components/VerifiedExecutions.tsx
-// Updated per guide 2.4: Now uses real /api/today-stats endpoint
+// Fixed: ops variable hoisted to outer scope so catch block can access it
 
 import { useState, useEffect } from 'react';
-import { api, TriangleOpportunity, TodayStats } from '../lib/api';
+import { api, TriangleOpportunity } from '../lib/api';
 import { format } from 'date-fns';
 
 export default function VerifiedExecutions() {
   const [opportunities, setOpportunities] = useState<TriangleOpportunity[]>([]);
-  const [todayStats, setTodayStats] = useState<TodayStats>({
+  const [todayStats, setTodayStats] = useState({
     gaps_found: 0,
-    avg_yield: 0,
-    total_potential: 0,
+    avg_yield: 0.0,
+    total_potential: 0.0,
   });
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     setLoading(true);
+    let ops: TriangleOpportunity[] = [];   // HOISTED to outer scope
+
     try {
-      // Fetch recent opportunities
-      const ops = await api.recentOpportunities(100);
+      ops = await api.recentOpportunities(100);
       setOpportunities(ops);
 
-      // Fetch real today stats from backend (new endpoint)
       const stats = await api.todayStats();
       setTodayStats(stats);
     } catch (error) {
       console.error('Failed to fetch verified executions:', error);
-      // Fallback if backend endpoint not ready yet
+      
+      // Fallback using whatever ops we managed to get
       setTodayStats({
         gaps_found: ops.length,
         avg_yield: ops.length > 0 
@@ -42,7 +43,6 @@ export default function VerifiedExecutions() {
   useEffect(() => {
     fetchData();
     
-    // Refresh every 10 seconds
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -73,7 +73,7 @@ export default function VerifiedExecutions() {
         </p>
       </div>
 
-      {/* Analytics Header - Now uses real backend data */}
+      {/* Analytics Header */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
           <div className="text-sm text-[var(--secondary-text)]">Gaps Found Today</div>
