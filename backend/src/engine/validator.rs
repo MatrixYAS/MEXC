@@ -1,5 +1,5 @@
 // backend/src/engine/validator.rs
-// Updated: min_profit_threshold now read from environment variable (per guide 1.3)
+// Fixed: gap_age_ms now tracks from first_seen (not last_seen)
 
 use crate::data::models::{OrderBookLevels, Triangle};
 use crate::engine::calculator::{validate_triangle, calculate_weighted_fill_price};
@@ -9,12 +9,9 @@ use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Persistence Filter (The "Anti-Ghost" Algo)
-/// - 3-Tick Rule: Gap must stay profitable (>0.15%) for 3 consecutive updates
-/// - Fill Score (A-F) based on order book density
-/// - Gap Age tracking
-
 #[derive(Debug, Clone)]
 pub struct PersistenceState {
+    pub first_seen: Instant,        // NEW: Tracks when the gap was first detected
     pub last_seen: Instant,
     pub consecutive_ticks: u8,
     pub last_net_yield: f64,
@@ -24,8 +21,10 @@ pub struct PersistenceState {
 
 impl Default for PersistenceState {
     fn default() -> Self {
+        let now = Instant::now();
         Self {
-            last_seen: Instant::now(),
+            first_seen: now,        // Initialize first_seen
+            last_seen: now,
             consecutive_ticks: 0,
             last_net_yield: 0.0,
             best_capacity: 0.0,
@@ -37,14 +36,13 @@ impl Default for PersistenceState {
 /// Main Validator for the Persistence Filter
 pub struct TriangleValidator {
     persistence_map: HashMap<Uuid, PersistenceState>,
-    min_profit_threshold: f64,   // Now dynamic from env var
+    min_profit_threshold: f64,
 }
 
 impl TriangleValidator {
     pub fn new() -> Self {
-        // Externalized configuration (guide 1.3)
         let min_profit_threshold = std::env::var("MIN_PROFIT_THRESHOLD")
-            .unwrap_or_else(|_| "0.0015".to_string())   // default = 0.15%
+            .unwrap_or_else(|_| "0.0015".to_string())
             .parse::<f64>()
             .expect("MIN_PROFIT_THRESHOLD must be a valid float");
 
@@ -54,7 +52,6 @@ impl TriangleValidator {
         }
     }
 
-    /// Calculate Fill Score (A-F) based on order book density
     fn calculate_fill_score(book1: &OrderBookLevels, book2: &OrderBookLevels, book3: &OrderBookLevels) -> String {
         let avg_vol = |levels: &[crate::data::models::PriceLevel; 20]| -> f64 {
             levels.iter().take(5).map(|l| l.volume).sum::<f64>() / 5.0
@@ -71,7 +68,6 @@ impl TriangleValidator {
         }.to_string()
     }
 
-    /// Main validation entry point - called on every WebSocket tick for a triangle
     pub fn validate_persistent(
         &mut self,
         triangle_id: Uuid,
@@ -107,7 +103,7 @@ impl TriangleValidator {
             let fill_score = Self::calculate_fill_score(book1, book2, book3);
 
             let mut triangle = Triangle::new(
-                "leg1".to_string(), // Real symbols are set by caller
+                "leg1".to_string(),
                 "leg2".to_string(),
                 "leg3".to_string(),
                 state.last_net_yield,
@@ -115,8 +111,9 @@ impl TriangleValidator {
             );
 
             triangle.fill_score = fill_score;
+            // FIXED: Use first_seen instead of last_seen
             triangle.gap_age_ms = current_time
-                .duration_since(state.last_seen)
+                .duration_since(state.first_seen)
                 .as_millis() as i64;
 
             triangle.is_verified = true;
