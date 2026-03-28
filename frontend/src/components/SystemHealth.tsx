@@ -1,5 +1,5 @@
 // frontend/src/components/SystemHealth.tsx
-// Updated per guide 2.2: Full API Key management + Test Connection + Save Keys
+// Fixed: Paper Mode section removed, cleaner API key management
 
 import { useState, useEffect } from 'react';
 import { api, TelemetryData } from '../lib/api';
@@ -8,12 +8,10 @@ export default function SystemHealth() {
   const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
-  const [paperMode, setPaperMode] = useState(true);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Fetch telemetry
   const fetchTelemetry = async () => {
     try {
       const data = await api.telemetry();
@@ -31,7 +29,6 @@ export default function SystemHealth() {
     return () => clearInterval(interval);
   }, []);
 
-  // Save API Keys
   const handleSaveKeys = async () => {
     if (!apiKey || !secretKey) {
       setStatusMessage('❌ Please enter both API Key and Secret');
@@ -42,7 +39,6 @@ export default function SystemHealth() {
     setStatusMessage('');
 
     try {
-      // Call backend endpoint (we'll add this in main.rs later if missing)
       const response = await fetch('/api/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -64,7 +60,6 @@ export default function SystemHealth() {
     }
   };
 
-  // Test Connection (placeholder - calls MEXC via backend)
   const handleTestConnection = async () => {
     if (!apiKey || !secretKey) {
       setStatusMessage('❌ Enter keys first');
@@ -170,7 +165,7 @@ export default function SystemHealth() {
         </div>
       </div>
 
-      {/* API Keys Management Section (New from guide) */}
+      {/* API Keys Management */}
       <div className="surface rounded-3xl p-8 border border-[var(--accent-border)]">
         <h3 className="text-xl font-semibold mb-6">MEXC API Keys (Secure)</h3>
         
@@ -218,25 +213,6 @@ export default function SystemHealth() {
               {statusMessage}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Paper Mode & Settings */}
-      <div className="surface rounded-3xl p-8 border border-[var(--accent-border)]">
-        <h3 className="text-xl font-semibold mb-6">Settings</h3>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="font-medium">Paper Mode</div>
-            <div className="text-sm text-[var(--secondary-text)]">Finding only • No live trading</div>
-          </div>
-          <button
-            onClick={() => setPaperMode(!paperMode)}
-            className={`px-6 py-2 rounded-xl font-medium transition-all ${
-              paperMode ? 'bg-emerald-500 text-white' : 'bg-gray-200 dark:bg-zinc-700'
-            }`}
-          >
-            {paperMode ? 'ENABLED' : 'DISABLED'}
-          </button>
         </div>
       </div>
     </div>
