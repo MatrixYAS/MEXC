@@ -4,7 +4,6 @@
 use crate::data::models::{OrderBookLevels, Triangle};
 use crate::engine::calculator::{validate_triangle, calculate_weighted_fill_price};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
