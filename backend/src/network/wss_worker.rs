@@ -8,8 +8,7 @@ use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 use chrono::Utc;
 
