@@ -17,11 +17,11 @@ fn encrypt(data: &str) -> String {
         encrypted.push(byte ^ salt.as_bytes()[i % salt.len()]);
     }
     
-    base64::encode(encrypted)
+    BASE64.encode(&encrypted)
 }
 
 fn decrypt(encrypted: &str) -> String {
-    let decoded = base64::decode(encrypted).unwrap_or_default();
+    let decoded = BASE64.decode(encrypted).unwrap_or_default();
     let salt = std::env::var("ENCRYPTION_SALT").unwrap_or_else(|_| "mexc-ghost-hunter-salt-2026".to_string());
     
     let mut decrypted = Vec::with_capacity(decoded.len());
