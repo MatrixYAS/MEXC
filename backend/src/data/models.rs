@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::sync::Arc;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
