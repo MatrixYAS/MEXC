@@ -1,5 +1,5 @@
 // backend/src/data/mod.rs
-// Clean public exports for the data layer
+// Fix: Re-export ApiKeys and ApiKeyRequest so main.rs can import them
 
 pub mod models;
 pub mod db;
@@ -12,6 +12,8 @@ pub use models::{
     WhitelistCoin,
     Telemetry,
     HealthResponse,
+    ApiKeys,        // Added for API key management
+    ApiKeyRequest,  // Added for API key management
 };
 
 pub use db::Database;
