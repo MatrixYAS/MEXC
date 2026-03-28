@@ -20,8 +20,10 @@ pub struct RestClient {
 
 impl RestClient {
     pub fn new() -> Self {
-        let quota = Quota::per_second(nonzero!(MAX_REQUESTS_PER_SECOND as u64))
-            .allow_burst(nonzero!(5u64)); // Small burst allowed for maintenance
+        let quota = Quota::per_second(
+    std::num::NonZeroU32::new(MAX_REQUESTS_PER_SECOND).unwrap()
+)
+.allow_burst(std::num::NonZeroU32::new(5).unwrap()); // Small burst allowed for maintenance
 
         let rate_limiter = Arc::new(RateLimiter::direct_with_clock(
             quota,
