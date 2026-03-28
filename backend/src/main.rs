@@ -216,4 +216,3 @@ async fn whitelist_handler(State(state): State<AppState>) -> Json<Vec<String>> {
     symbols.sort();
     Json(symbols)
 }
-}
