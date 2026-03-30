@@ -2,7 +2,7 @@
 // Fixed: gap_age_ms now tracks from first_seen (not last_seen)
 
 use crate::data::models::{OrderBookLevels, Triangle};
-use crate::engine::calculator::{validate_triangle, calculate_weighted_fill_price};
+use crate::engine::calculator::validate_triangle;
 use std::collections::HashMap;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
