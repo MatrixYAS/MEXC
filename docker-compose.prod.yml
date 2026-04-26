@@ -1,0 +1,42 @@
+# Production Docker Compose - VPS Deployment
+version: '3.8'
+
+services:
+  mexc-ghost-hunter:
+    image: mexc-ghost-hunter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"  # Bind to localhost only, use nginx proxy in front
+    environment:
+      PORT: 8080
+      RUST_LOG: info
+      RUST_BACKTRACE: 1
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DATA_DIR: /data
+      MIN_PROFIT_THRESHOLD: ${MIN_PROFIT_THRESHOLD:-0.0015}
+      TARGET_VOLUME_USD: ${TARGET_VOLUME_USD:-1000.0}
+      MIN_VOLUME_24H: ${MIN_VOLUME_24H:-500000.0}
+    volumes:
+      - /opt/mexc/data:/data
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 512M
+        reservations:
+          cpus: '1'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

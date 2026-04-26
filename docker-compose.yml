@@ -1,34 +1,32 @@
-version: '3.9'
+# Development Docker Compose - Quick Start
+version: '3.8'
 
 services:
   mexc-ghost-hunter:
-    build: .
-    container_name: mexc-ghost-hunter
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "7860:7860"      # Main port for both local and Hugging Face
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ghosthunter123}
+      DATA_DIR: /data
+      MIN_PROFIT_THRESHOLD: 0.0015
+      TARGET_VOLUME_USD: 1000.0
+      MIN_VOLUME_24H: 500000.0
     volumes:
-      - ./data:/data     # Persistent SQLite database
-    env_file:
-      - .env
+      - mexc-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7860/api/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 10s
 
-  # Development frontend only (hot reload)
-  frontend-dev:
-    image: node:20-alpine
-    container_name: mexc-frontend-dev
-    working_dir: /app/frontend
-    volumes:
-      - ./frontend:/app/frontend
-    ports:
-      - "5173:5173"
-    command: sh -c "npm install && npm run dev -- --host"
-    profiles:
-      - dev
-    depends_on:
-      - mexc-ghost-hunter
+volumes:
+  mexc-data:
+    driver: local
