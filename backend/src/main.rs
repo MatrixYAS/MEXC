@@ -1,5 +1,5 @@
 // backend/src/main.rs
-// Fully fixed version: SSE, static serving, API keys, auth, async telemetry, and all guide fixes
+// Production version: Secure config from environment, error handling
 
 use anyhow::Result;
 use axum::{
@@ -41,18 +41,23 @@ struct AppState {
     ws_pool: Arc<Mutex<network::WssPool>>,
     opportunity_sender: broadcast::Sender<Opportunity>,
     api_keys: Arc<RwLock<Option<ApiKeys>>>,
-    db: Arc<Database>,                    // Direct DB access for keys
+    db: Arc<Database>,
     admin_password: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize tracing from RUST_LOG environment variable
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     tracing::info!("🚀 Starting MEXC Ghost Hunter...");
+
+    // Load database with data directory from environment
+    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "/data".to_string());
+    tracing::info!("📁 Using data directory: {}", data_dir);
 
     let db = Arc::new(Database::new().await?);
     let math_engine = Arc::new(MathEngine::new());
@@ -66,8 +71,14 @@ async fn main() -> Result<()> {
     let (opportunity_sender, _) = broadcast::channel::<Opportunity>(100);
     let api_keys = Arc::new(RwLock::new(db.get_api_keys().await.ok().flatten()));
 
+    // CRITICAL: Load admin password from environment, NEVER hardcode
     let admin_password = std::env::var("ADMIN_PASSWORD")
-        .unwrap_or_else(|_| "ghosthunter123".to_string());
+        .or_else(|_| std::env::var("GHOST_HUNTER_ADMIN_PASSWORD"))
+        .expect("❌ ADMIN_PASSWORD environment variable not set. Set it before running: export ADMIN_PASSWORD='your_secure_password'");
+
+    if admin_password.len() < 8 {
+        tracing::warn!("⚠️ WARNING: Admin password is shorter than 8 characters. Consider using a stronger password.");
+    }
 
     let state = AppState {
         math_engine: Arc::clone(&math_engine),
@@ -98,9 +109,10 @@ async fn main() -> Result<()> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "7860".to_string());
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("✅ Server listening on http://{}", addr);
+    tracing::info!("📊 Telemetry available at http://{}:PORT/api/health", "localhost");
 
     axum::Server::bind(&addr.parse()?)
         .serve(app.into_make_service())
@@ -145,8 +157,10 @@ async fn save_api_keys_handler(
     Json(payload): Json<ApiKeyRequest>,
 ) -> Result<Json<&'static str>, (StatusCode, String)> {
     if let Err(e) = state.db.save_api_keys(payload).await {
+        tracing::error!("Failed to save API keys: {}", e);
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
+    tracing::info!("✅ API keys updated successfully");
     Ok(Json("API keys saved successfully"))
 }
 
@@ -166,9 +180,13 @@ async fn login_handler(
     State(state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    if payload["password"].as_str() == Some(&state.admin_password) {
+    let provided_password = payload["password"].as_str().unwrap_or("");
+    
+    if provided_password == state.admin_password {
+        tracing::info!("✅ Login successful");
         Ok(Json(serde_json::json!({ "token": "authenticated" })))
     } else {
+        tracing::warn!("❌ Failed login attempt");
         Err((StatusCode::UNAUTHORIZED, "Invalid password".to_string()))
     }
 }
@@ -180,11 +198,14 @@ async fn today_stats_handler(State(state): State<AppState>) -> Json<serde_json::
             "avg_yield": avg,
             "total_potential": total
         })),
-        Err(_) => Json(serde_json::json!({
-            "gaps_found": 0,
-            "avg_yield": 0.0,
-            "total_potential": 0.0
-        })),
+        Err(e) => {
+            tracing::warn!("Failed to get today's analytics: {}", e);
+            Json(serde_json::json!({
+                "gaps_found": 0,
+                "avg_yield": 0.0,
+                "total_potential": 0.0
+            }))
+        }
     }
 }
 
@@ -204,7 +225,10 @@ async fn telemetry_handler(State(state): State<AppState>) -> Json<Telemetry> {
 async fn recent_opportunities_handler(State(state): State<AppState>) -> Json<Vec<Opportunity>> {
     match state.trade_logger.get_recent(50).await {
         Ok(ops) => Json(ops),
-        Err(_) => Json(vec![]),
+        Err(e) => {
+            tracing::warn!("Failed to fetch recent opportunities: {}", e);
+            Json(vec![])
+        }
     }
 }
 
