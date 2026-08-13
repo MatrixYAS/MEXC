@@ -70,6 +70,12 @@ impl TelemetryCollector {
         self.start_time.elapsed().as_millis() as i64
     }
 
+    /// Full telemetry snapshot, used by the SSE heartbeat so the dashboard
+    /// always shows live status even in quiet markets.
+    pub async fn snapshot(&self) -> Telemetry {
+        self.collect().await
+    }
+
     pub async fn start_collector(self: Arc<Self>) {
         // stats are now computed inline on demand in collect(); keep this task
         // alive so the collector is not dropped (historical placeholder).

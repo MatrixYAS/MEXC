@@ -676,10 +676,25 @@ async fn live_pulse_sse_handler(
     State(state): State<AppState>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
     let rx = state.opportunity_sender.subscribe();
-    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+    // The market can stay flat for minutes — without periodic keep-alive
+    // frames reverse proxies and browsers close idle SSE connections and
+    // the dashboard gets stuck on "Reconnecting". Emit a heartbeat every
+    // 15s plus an initial snapshot so clients always receive something.
+    let initial = async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let snapshot = state.telemetry_collector.snapshot().await;
+        Ok(Event::default().event("snapshot").json_data(snapshot).unwrap())
+    };
+    let events = tokio_stream::wrappers::BroadcastStream::new(rx)
         .filter_map(|msg| async move { msg.ok() })
-        .map(|opportunity| Ok(Event::default().json_data(opportunity).unwrap()));
-    Sse::new(stream)
+        .map(|opportunity| Ok(Event::default().event("gap").json_data(opportunity).unwrap()));
+    let keepalive = tokio_stream::wrappers::IntervalStream::new(
+        tokio::time::interval(tokio::time::Duration::from_secs(15)),
+    )
+    .skip(1)
+    .map(|_| Ok::<Event, Infallible>(Event::default().event("heartbeat").comment("keep-alive")));
+    Sse::new(futures::stream::once(initial).chain(futures::stream::select(events, keepalive)))
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(tokio::time::Duration::from_secs(15)))
 }
 
 async fn recent_opportunities_handler(
