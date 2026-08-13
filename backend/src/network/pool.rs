@@ -17,14 +17,25 @@ pub struct WssPool {
     math_engine: Arc<MathEngine>,
     workers: Vec<JoinHandle<()>>,
     current_symbols: Vec<String>,
+    /// One shared REST client for the whole pool — all workers draw from the
+    /// same rate bucket, so boot seeding + reseeds never exceed MEXC's limit.
+    rest: Arc<crate::network::RestClient>,
 }
 
 impl WssPool {
     pub fn new(math_engine: Arc<MathEngine>) -> Self {
+        Self::new_with_rest(math_engine, Arc::new(crate::network::RestClient::new()))
+    }
+
+    pub fn new_with_rest(
+        math_engine: Arc<MathEngine>,
+        rest: Arc<crate::network::RestClient>,
+    ) -> Self {
         Self {
             math_engine,
             workers: Vec::with_capacity(NUM_WORKERS),
             current_symbols: Vec::new(),
+            rest,
         }
     }
 
@@ -36,6 +47,11 @@ impl WssPool {
     /// Read the currently subscribed symbol set
     pub fn current_symbols(&self) -> &[String] {
         &self.current_symbols
+    }
+
+    /// Shared rate-limited REST client used by all workers (single bucket).
+    pub fn rest_client(&self) -> Arc<crate::network::RestClient> {
+        Arc::clone(&self.rest)
     }
 
     /// Spawn all workers with their assigned symbols
@@ -55,12 +71,18 @@ impl WssPool {
 
             let worker_symbols = self.current_symbols[start_idx..end_idx].to_vec();
             let engine_clone = Arc::clone(&self.math_engine);
+            let rest_clone = Arc::clone(&self.rest);
             let worker_id = i;
 
             let handle: JoinHandle<()> = tokio::spawn(async move {
                 let mut retries = 0;
                 loop {
-                    let worker = WssWorker::new(worker_symbols.clone(), engine_clone.clone(), worker_id);
+                    let worker = WssWorker::new(
+                        worker_symbols.clone(),
+                        engine_clone.clone(),
+                        worker_id,
+                        Arc::clone(&rest_clone),
+                    );
                     
                     if let Err(e) = worker.run().await {
                         tracing::error!("Worker {} failed: {}", worker_id, e);

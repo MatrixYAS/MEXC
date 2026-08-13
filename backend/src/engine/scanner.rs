@@ -45,6 +45,9 @@ pub struct Scanner {
     /// cooldown: last emission time per loop to avoid flooding identical
     /// opportunities every tick.
     last_emit: HashMap<Uuid, Instant>,
+    /// Best gross gap observed across all loops in the current sample window.
+    best_gap: Option<(f64, String, Instant)>,
+    last_gap_log: Instant,
 }
 
 /// Minimum silence between two emissions of the same loop.
@@ -70,13 +73,15 @@ impl Scanner {
         Self {
             math_engine,
             topology: Vec::new(),
-            topology_updated_at: Instant::now() - Duration::from_secs(3600),
-            validator: TriangleValidator::new(max_ticks),
-            tick_interval_ms,
+            topology_updated_at: Instant::now(),
+            validator: TriangleValidator::new(3),
+            tick_interval_ms: 50,
             paused: false,
             settings: None,
             loop_stats: HashMap::new(),
             last_emit: HashMap::new(),
+            best_gap: None,
+            last_gap_log: Instant::now(),
         }
     }
 
@@ -142,6 +147,8 @@ impl Scanner {
     pub fn tick(&mut self) -> Vec<Opportunity> {
         let mut verified = Vec::new();
 
+        // Sample the best live gross gap across all loops (5s window).
+        let mut sampled_gap: Option<(f64, String)> = None;
         for topo in self.topology.iter() {
             let b1 = match self.math_engine.get_order_book(&topo.pair1) {
                 Some(b) => b,
@@ -160,6 +167,17 @@ impl Scanner {
                 continue;
             }
             if top_of_book_precheck(&b1, &b2, &b3).is_none() {
+                // Still track the best live gap for visibility even if it
+                // doesn't clear the 0.5% precheck floor.
+                if let Some(gross) = gross_gap(&b1, &b2, &b3) {
+                    match sampled_gap {
+                        None => sampled_gap = Some((gross, topo.pair2.clone())),
+                        Some((cur, _)) if gross > cur => {
+                            sampled_gap = Some((gross, topo.pair2.clone()));
+                        }
+                        _ => {}
+                    }
+                }
                 continue;
             }
 
@@ -227,6 +245,24 @@ impl Scanner {
         }
 
         self.validator.cleanup_old_entries(Duration::from_secs(30));
+
+        // Publish the sampled best gap every 5 seconds (visibility, not noise).
+        if let Some((g, path)) = sampled_gap {
+            match &self.best_gap {
+                None => self.best_gap = Some((g, path, Instant::now())),
+                Some((cur, _, start)) if g > *cur || start.elapsed() >= Duration::from_secs(5) => {
+                    self.best_gap = Some((g, path, Instant::now()));
+                }
+                Some(_) => {}
+            }
+        }
+        if self.last_gap_log.elapsed() >= Duration::from_secs(5) {
+            if let Some((g, path, _)) = self.best_gap.take() {
+                tracing::info!("best live gross gap = {:.4}% via {} ({} loops scanned)", (g - 1.0) * 100.0, path, self.topology.len());
+            }
+            self.last_gap_log = Instant::now();
+        }
+
         verified
     }
 
@@ -234,19 +270,19 @@ impl Scanner {
 
 /// Instant top-of-book gross-product pre-filter. If the naive product of best
 /// prices cannot exceed ~0.5% above 1.0, skip the heavy weighted-fill math.
-fn top_of_book_precheck(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -> Option<()> {
+/// Gross round-trip multiplier: USDT -ask1-> A -ask2-> B -bid3-> USDT.
+fn gross_gap(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -> Option<f64> {
     let best_ask1 = b1.asks.iter().find(|l| l.price > 0.0)?;
     let best_ask2 = b2.asks.iter().find(|l| l.price > 0.0)?;
     let best_bid3 = b3.bids.iter().find(|l| l.price > 0.0)?;
-
-    // Gross path: USDT -ask1-> A -ask2-> B -bid3-> USDT
-    // ask1 (COINAUSDT) = USDT per A; ask2 (COINBCOINA) = A per B; bid3 (COINBUSDT) = USDT per B.
-    // USDT in: 1/ask1 units of A; B out = (1/ask1)/ask2; USDT out = B*bid3.
-    // gross = bid3 / (ask1 * ask2)
     if best_ask2.price <= 0.0 {
         return None;
     }
-    let gross = best_bid3.price / (best_ask1.price * best_ask2.price);
+    Some(best_bid3.price / (best_ask1.price * best_ask2.price))
+}
+
+fn top_of_book_precheck(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -> Option<()> {
+    let gross = gross_gap(b1, b2, b3)?;
     if gross <= 1.005 {
         None
     } else {

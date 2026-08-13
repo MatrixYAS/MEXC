@@ -8,11 +8,11 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-COPY frontend/package*.json ./
-RUN npm ci
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@latest-9 --activate
 
 COPY frontend/ ./
-RUN npm run build
+RUN pnpm install --frozen-lockfile && pnpm build
 
 # === Stage 2: Build Rust Backend ===
 FROM rust:1.84-alpine AS rust-builder
@@ -51,7 +51,7 @@ RUN addgroup -g 1000 mexc && \
 # Copy Rust binary
 COPY --from=rust-builder /app/backend/target/release/mexc-ghost-hunter /usr/local/bin/mexc-ghost-hunter
 
-# Copy built React frontend
+# Copy built React frontend (ServeDir resolves "frontend/dist" relative to WORKDIR /app)
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 # Create persistent data directory

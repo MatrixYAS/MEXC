@@ -46,7 +46,7 @@ export default function VerifiedExecutions() {
     }
   };
 
-  const filtered = rows.filter((r) => r.net_yield_percent * 100 >= minYield);
+  const filtered = rows.filter((r) => r.net_yield_percent >= minYield);
 
   const fmtAge = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
 
@@ -108,15 +108,15 @@ export default function VerifiedExecutions() {
                 <tr key={r.id} className="hover:bg-[rgba(16,185,129,0.05)]">
                   <Td className="text-[var(--secondary-text)] font-mono">{new Date(r.detected_at).toLocaleTimeString()}</Td>
                   <Td className="font-mono font-medium">{r.path}</Td>
-                  <Td className="font-semibold text-success">+{(r.net_yield_percent * 100).toFixed(3)}%</Td>
-                  <Td className="text-[var(--secondary-text)]">+{(r.gross_gap_percent * 100).toFixed(4)}%</Td>
-                  <Td className="text-[var(--secondary-text)]">{(r.fee_cost_percent * 100).toFixed(3)}%</Td>
+                  <Td className="font-semibold text-success">+{r.net_yield_percent.toFixed(3)}%</Td>
+                  <Td className="text-[var(--secondary-text)]">+{r.gross_gap_percent.toFixed(4)}%</Td>
+                  <Td className="text-[var(--secondary-text)]">{r.fee_cost_percent.toFixed(3)}%</Td>
                   <Td className="font-medium text-success">${r.estimated_profit_usd.toFixed(2)}</Td>
                   <Td>${r.capacity_usd.toFixed(0)}</Td>
                   <Td>{r.ticks_survived}/3</Td>
                   <Td><span className="badge-C">{r.fill_score}</span></Td>
-                  <Td>{(r.slippage_percent * 100).toFixed(4)}%</Td>
-                  <Td>{(r.confidence * 100).toFixed(0)}%</Td>
+                  <Td>{r.slippage_percent.toFixed(4)}%</Td>
+                  <Td>{r.confidence.toFixed(0)}%</Td>
                   <Td className="font-mono">{fmtAge(r.gap_age_ms)}</Td>
                   <Td className="font-mono text-[var(--secondary-text)]">{r.staleness_ms}</Td>
                 </tr>

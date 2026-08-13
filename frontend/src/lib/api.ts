@@ -18,6 +18,9 @@ export interface Opportunity {
   confidence: number;
   maker_plan_yield_percent: number;
   slippage_percent: number;
+  optimal_size_usd: number;
+  optimal_net_yield_percent: number;
+  size_curve_json: string;
   leg1_symbol: string;
   leg1_entry_price: number;
   leg1_fill_price: number;

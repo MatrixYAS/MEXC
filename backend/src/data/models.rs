@@ -36,6 +36,9 @@ impl Opportunity {
             confidence: r.get(12),
             maker_plan_yield_percent: r.get(13),
             slippage_percent: r.get(14),
+            optimal_size_usd: r.get(26),
+            optimal_net_yield_percent: r.get(27),
+            size_curve_json: r.get(28),
             leg1_symbol: r.get(15),
             leg1_entry_price: r.get(16),
             leg1_fill_price: r.get(17),
@@ -144,6 +147,12 @@ pub struct Opportunity {
     pub maker_plan_yield_percent: f64,
     pub slippage_percent: f64,
 
+    // Optimal trade size — largest size that keeps net yield at/above threshold,
+    // plus the yield curve so you can see how slippage eats the gap at size.
+    pub optimal_size_usd: f64,
+    pub optimal_net_yield_percent: f64,
+    pub size_curve_json: String,
+
     pub leg1_symbol: String,
     pub leg1_entry_price: f64,
     pub leg1_fill_price: f64,
@@ -194,7 +203,7 @@ impl Default for SettingsSnapshot {
             tick_interval_ms: 50,
             required_ticks: 3,
             max_whitelist: 300,
-            min_24h_volume_usd: 1_000_000.0,
+            min_24h_volume_usd: 300_000.0,
             retention_days: 7,
             scan_paused: false,
             updated_at: String::new(),

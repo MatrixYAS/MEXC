@@ -103,6 +103,9 @@ impl Database {
                 confidence REAL NOT NULL,
                 maker_plan_yield_percent REAL NOT NULL,
                 slippage_percent REAL NOT NULL,
+                optimal_size_usd REAL NOT NULL DEFAULT 0,
+                optimal_net_yield_percent REAL NOT NULL DEFAULT 0,
+                size_curve_json TEXT NOT NULL DEFAULT '[]',
                 leg1_symbol TEXT NOT NULL,
                 leg1_entry_price REAL NOT NULL,
                 leg1_fill_price REAL NOT NULL,
@@ -245,11 +248,12 @@ impl Database {
             (id, triangle_id, path, net_yield_percent, gross_gap_percent, fee_cost_percent,
              estimated_profit_usd, capacity_usd, gap_age_ms, ticks_survived, fill_score,
              staleness_ms, confidence, maker_plan_yield_percent, slippage_percent,
+             optimal_size_usd, optimal_net_yield_percent, size_curve_json,
              leg1_symbol, leg1_entry_price, leg1_fill_price,
              leg2_symbol, leg2_entry_price, leg2_fill_price,
              leg3_symbol, leg3_entry_price, leg3_fill_price,
              detected_at, is_executed)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             "#
         )
         .bind(opp.id.to_string())
@@ -267,6 +271,9 @@ impl Database {
         .bind(opp.confidence)
         .bind(opp.maker_plan_yield_percent)
         .bind(opp.slippage_percent)
+        .bind(opp.optimal_size_usd)
+        .bind(opp.optimal_net_yield_percent)
+        .bind(&opp.size_curve_json)
         .bind(&opp.leg1_symbol)
         .bind(opp.leg1_entry_price)
         .bind(opp.leg1_fill_price)
@@ -285,7 +292,7 @@ impl Database {
 
     pub async fn get_recent_opportunities(&self, limit: i64) -> Result<Vec<Opportunity>> {
         let rows: Vec<sqlx::sqlite::SqliteRow> = sqlx::query(
-            "SELECT id, triangle_id, path, net_yield_percent, gross_gap_percent, fee_cost_percent, estimated_profit_usd, capacity_usd, gap_age_ms, ticks_survived, fill_score, staleness_ms, confidence, maker_plan_yield_percent, slippage_percent, leg1_symbol, leg1_entry_price, leg1_fill_price, leg2_symbol, leg2_entry_price, leg2_fill_price, leg3_symbol, leg3_entry_price, leg3_fill_price, detected_at, is_executed FROM opportunities ORDER BY detected_at DESC LIMIT ?"
+            "SELECT id, triangle_id, path, net_yield_percent, gross_gap_percent, fee_cost_percent, estimated_profit_usd, capacity_usd, gap_age_ms, ticks_survived, fill_score, staleness_ms, confidence, maker_plan_yield_percent, slippage_percent, leg1_symbol, leg1_entry_price, leg1_fill_price, leg2_symbol, leg2_entry_price, leg2_fill_price, leg3_symbol, leg3_entry_price, leg3_fill_price, detected_at, is_executed, optimal_size_usd, optimal_net_yield_percent, size_curve_json FROM opportunities ORDER BY detected_at DESC LIMIT ?"
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -295,7 +302,7 @@ impl Database {
 
     pub async fn get_all_opportunities(&self) -> Result<Vec<Opportunity>> {
         let rows: Vec<sqlx::sqlite::SqliteRow> = sqlx::query(
-            "SELECT id, triangle_id, path, net_yield_percent, gross_gap_percent, fee_cost_percent, estimated_profit_usd, capacity_usd, gap_age_ms, ticks_survived, fill_score, staleness_ms, confidence, maker_plan_yield_percent, slippage_percent, leg1_symbol, leg1_entry_price, leg1_fill_price, leg2_symbol, leg2_entry_price, leg2_fill_price, leg3_symbol, leg3_entry_price, leg3_fill_price, detected_at, is_executed FROM opportunities ORDER BY detected_at DESC"
+            "SELECT id, triangle_id, path, net_yield_percent, gross_gap_percent, fee_cost_percent, estimated_profit_usd, capacity_usd, gap_age_ms, ticks_survived, fill_score, staleness_ms, confidence, maker_plan_yield_percent, slippage_percent, leg1_symbol, leg1_entry_price, leg1_fill_price, leg2_symbol, leg2_entry_price, leg2_fill_price, leg3_symbol, leg3_entry_price, leg3_fill_price, detected_at, is_executed, optimal_size_usd, optimal_net_yield_percent, size_curve_json FROM opportunities ORDER BY detected_at DESC"
         )
         .fetch_all(&self.pool)
         .await?;

@@ -67,6 +67,7 @@ impl TokenBucket {
 }
 
 /// Rate-limited REST client for MEXC API
+#[derive(Clone)]
 pub struct RestClient {
     client: Client,
     rate_limiter: Arc<TokenBucket>,
@@ -82,7 +83,7 @@ impl RestClient {
 
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
                 .user_agent("MEXC-Ghost-Hunter/0.1")
                 .build()
                 .expect("Failed to build reqwest client"),
@@ -155,10 +156,15 @@ impl RestClient {
     /// full-market volume-ranked whitelist (no pagination needed).
     pub async fn get_all_tickers(&self) -> Result<Vec<serde_json::Value>> {
         self.wait_for_permission().await;
-        let resp = self.client
-            .get("https://api.mexc.com/api/v3/ticker/24hr")
-            .send()
-            .await?;
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.client.get("https://api.mexc.com/api/v3/ticker/24hr").send(),
+        )
+        .await
+        {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("ticker/24hr request timed out (API too slow; retry later)"),
+        };
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             anyhow::bail!("MEXC API error: {}", text);

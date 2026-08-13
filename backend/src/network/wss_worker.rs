@@ -26,13 +26,16 @@ const MAX_LEVELS: usize = 20;
 /// reliably push removal frames for consumed levels, so stale prices can
 /// linger at the top of the book and create phantom arbitrage. A full REST
 /// depth snapshot on a cadence keeps the books anchored to reality.
-const RESNAP_INTERVAL: Duration = Duration::from_secs(30);
+const RESNAP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// One WebSocket worker managing up to 30 symbols
 pub struct WssWorker {
     symbols: Vec<String>,
     math_engine: Arc<MathEngine>,
     worker_id: usize,
+    /// Shared rate-limited REST client — one global rate bucket for the whole
+    /// bot, so all workers together stay under MEXC's IP rate limit.
+    rest: Arc<crate::network::RestClient>,
 }
 
 /// Full-book state used to apply incremental depth deltas.
@@ -42,11 +45,17 @@ struct BookState {
 }
 
 impl WssWorker {
-    pub fn new(symbols: Vec<String>, math_engine: Arc<MathEngine>, worker_id: usize) -> Self {
+    pub fn new(
+        symbols: Vec<String>,
+        math_engine: Arc<MathEngine>,
+        worker_id: usize,
+        rest: Arc<crate::network::RestClient>,
+    ) -> Self {
         Self {
             symbols,
             math_engine,
             worker_id,
+            rest,
         }
     }
 
@@ -92,9 +101,11 @@ impl WssWorker {
         // Seed each symbol with a full depth snapshot from REST so incremental
         // deltas can be applied on top of a known-good book.
         let mut books: HashMap<String, BookState> = HashMap::new();
-        let rest = crate::network::RestClient::new();
+        // Boot seeding uses the single shared RestClient (one global rate
+        // bucket for the whole bot). All workers draw from the same bucket,
+        // so boot bursts never exceed the MEXC limit.
         for sym in &self.symbols {
-            match rest.get_order_book_snapshot(sym, 100).await {
+            match self.rest.get_order_book_snapshot(sym, 100).await {
                 Ok(value) => {
                     let mut bids = HashMap::new();
                     let mut asks = HashMap::new();
@@ -141,97 +152,15 @@ impl WssWorker {
             }
         }
 
-        // Push the seeded snapshots into the math engine so scanning can start
+                // Push the seeded snapshots into the math engine so scanning can start
         // immediately even before the first WS delta arrives.
         for (sym, book) in &books {
             self.push_book(sym, book);
         }
-
-        // Periodically re-seed every book from REST so stale levels (that the
-        // aggregated pb stream never removes) cannot drift the book away from
-        // the true market.
-        let reseed_symbols = self.symbols.clone();
-        let reseed_engine = Arc::clone(&self.math_engine);
-        let wid = self.worker_id;
-        let reseed_push = move |sym: &str, book: &BookState| {
-            let mut bids: [PriceLevel; MAX_LEVELS] = [PriceLevel::default(); MAX_LEVELS];
-            let mut asks: [PriceLevel; MAX_LEVELS] = [PriceLevel::default(); MAX_LEVELS];
-            let mut bid_vec: Vec<(f64, f64)> = book
-                .bids
-                .iter()
-                .filter_map(|(p, q)| Some((p.parse::<f64>().ok()?, *q)))
-                .collect();
-            bid_vec.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (i, (price, vol)) in bid_vec.into_iter().take(MAX_LEVELS).enumerate() {
-                bids[i] = PriceLevel { price, volume: vol };
-            }
-            let mut ask_vec: Vec<(f64, f64)> = book
-                .asks
-                .iter()
-                .filter_map(|(p, q)| Some((p.parse::<f64>().ok()?, *q)))
-                .collect();
-            ask_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (i, (price, vol)) in ask_vec.into_iter().take(MAX_LEVELS).enumerate() {
-                asks[i] = PriceLevel { price, volume: vol };
-            }
-            let mut levels = OrderBookLevels {
-                bids,
-                asks,
-                last_update_time: Utc::now(),
-                symbol: {
-                    let mut arr = [0u8; 16];
-                    let bytes = sym.as_bytes();
-                    let len = bytes.len().min(16);
-                    arr[..len].copy_from_slice(&bytes[..len]);
-                    arr
-                },
-            };
-            levels.update_time();
-            reseed_engine.update_order_book(sym.to_string(), levels);
-            tracing::debug!("Worker {} refreshed book for {} from REST", wid, sym);
-        };
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(RESNAP_INTERVAL);
-            let rest = crate::network::RestClient::new();
-            loop {
-                ticker.tick().await;
-                for sym in &reseed_symbols {
-                    match rest.get_order_book_snapshot(sym, 50).await {
-                        Ok(value) => {
-                            let mut bids = HashMap::new();
-                            let mut asks = HashMap::new();
-                            if let Some(b) = value["bids"].as_array() {
-                                for level in b {
-                                    if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
-                                        if let (Ok(price), Ok(vol)) = (p.parse::<f64>(), q.parse::<f64>()) {
-                                            if vol > 0.0 {
-                                                bids.insert(p.to_string(), vol);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(a) = value["asks"].as_array() {
-                                for level in a {
-                                    if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
-                                        if let (Ok(price), Ok(vol)) = (p.parse::<f64>(), q.parse::<f64>()) {
-                                            if vol > 0.0 {
-                                                asks.insert(p.to_string(), vol);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            reseed_push(&sym.to_uppercase(), &BookState { bids, asks });
-                        }
-                        Err(e) => {
-                            tracing::warn!("Worker {} REST re-seed failed for {} ({}); keeping current book", wid, sym, e);
-                        }
-                    }
-                }
-            }
-        });
-
+        // Global book re-seeding is handled by one shared ReseedTask (see
+        // network::reseed::ReseedTask) — doing it per-worker in parallel
+        // hammered MEXC's IP rate limit (thousands of 429s) because each worker
+        // spawned its own REST client with its own rate-limit bucket.
         // Process incoming messages
         while let Some(msg) = ws_stream.next().await {
             match msg {

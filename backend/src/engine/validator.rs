@@ -92,15 +92,14 @@ impl TriangleValidator {
             .entry(triangle_id)
             .or_insert_with(PersistenceState::default);
 
+        let threshold = self
+            .settings
+            .as_ref()
+            .map(|s| futures::executor::block_on(s.read()).min_profit_threshold)
+            .unwrap_or(0.0025);
+
         match &report {
             Some(r) => {
-                let threshold = self
-                    .settings
-                    .as_ref()
-                    .map(|s| {
-                        futures::executor::block_on(s.read()).min_profit_threshold
-                    })
-                    .unwrap_or(0.0025);
                 if r.net_yield >= threshold {
                     state.consecutive_ticks = state.consecutive_ticks.saturating_add(1);
                     // keep the best (highest net yield) report seen in this run
@@ -143,6 +142,14 @@ impl TriangleValidator {
 
             let fr = state.best_fill_report.as_ref().unwrap_or(&report);
 
+            // Optimal trade size: largest size that keeps the net yield at or
+            // above the profit threshold given the current order-book depth.
+            let (optimal_size, optimal_yield, curve) =
+                crate::engine::calculator::find_optimal_size(&book1, &book2, &book3, threshold)
+                    .unwrap_or((0.0, 0.0, vec![]));
+            let size_curve_json = serde_json::to_string(&curve).unwrap_or_else(|_| "[]".into());
+            let est_profit = if optimal_size > 0.0 { optimal_size * optimal_yield } else { fr.estimated_profit_usd };
+
             Some(Opportunity {
                 id: Uuid::new_v4(),
                 triangle_id,
@@ -150,7 +157,7 @@ impl TriangleValidator {
                 net_yield_percent: fr.net_yield * 100.0,
                 gross_gap_percent: fr.gross_yield * 100.0,
                 fee_cost_percent: fr.fee_cost * 100.0,
-                estimated_profit_usd: fr.estimated_profit_usd,
+                estimated_profit_usd: est_profit,
                 capacity_usd: fr.capacity_usd,
                 gap_age_ms,
                 ticks_survived: state.consecutive_ticks as i32,
@@ -159,6 +166,9 @@ impl TriangleValidator {
                 confidence: 0.5,            // set by scanner from loop stats
                 maker_plan_yield_percent: fr.maker_yield * 100.0,
                 slippage_percent: fr.slippage * 100.0,
+                optimal_size_usd: optimal_size,
+                optimal_net_yield_percent: optimal_yield * 100.0,
+                size_curve_json,
                 leg1_symbol: pair1,
                 leg2_symbol: pair2,
                 leg3_symbol: pair3,

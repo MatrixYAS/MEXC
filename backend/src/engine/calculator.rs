@@ -240,6 +240,75 @@ fn buy_b_with_a(asks: &[PriceLevel; 20], amount_a: f64) -> (f64, FillResult) {
     )
 }
 
+/// Size point on the yield curve: net yield achievable at a given trade size.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SizePoint {
+    pub size_usd: f64,
+    pub net_yield: f64,
+}
+
+/// Find the OPTIMAL trade size for the loop: the largest size whose net yield
+/// stays at or above the minimum threshold, plus a compact yield curve (7 size
+/// points from $100 up to the max fillable size). This is the size the loop
+/// SHOULD trade — bigger sizes eat deeper into the book and shrink the gap.
+/// Returns None only if the books are unusable; the curve may show negative
+/// yields at large sizes (that's the honest slippage reality).
+pub fn find_optimal_size(
+    book1: &OrderBookLevels,
+    book2: &OrderBookLevels,
+    book3: &OrderBookLevels,
+    threshold: f64,
+) -> Option<(f64, f64, Vec<SizePoint>)> {
+    let fee = taker_fee();
+    let buffer = slippage_buffer();
+
+    // rough max fillable USD on leg 1 (first pass, best levels only)
+    let leg1_base_cap = book1
+        .asks
+        .iter()
+        .filter(|l| l.price > 0.0 && l.volume > 0.0)
+        .take(10)
+        .map(|l| l.price * l.volume)
+        .sum::<f64>();
+    let max_usd = leg1_base_cap.min(100_000.0).max(100.0);
+
+    let eval = |usd: f64| -> Option<(f64, f64)> {
+        let f1 = calculate_weighted_fill(&book1.asks, usd, true);
+        if f1.is_low_liquidity || f1.fill_price <= 0.0 {
+            return None;
+        }
+        let (amount_b, f2) = buy_b_with_a(&book2.asks, f1.filled_volume);
+        if amount_b <= 0.0 || f2.is_low_liquidity {
+            return None;
+        }
+        let f3 = calculate_weighted_fill(&book3.bids, amount_b, false);
+        if f3.is_low_liquidity || f3.fill_price <= 0.0 {
+            return None;
+        }
+        let gross_yield = f3.filled_volume / usd - 1.0;
+        let net = gross_yield - fee * 3.0 - buffer;
+        Some((net, usd))
+    };
+
+    // Yield curve at geometric size points up to max_usd.
+    let mut curve = Vec::new();
+    for exp in [2.0, 2.302, 2.605, 2.908, 3.21, 3.51, 3.815] {
+        let size = 10_f64.powf(exp).min(max_usd);
+        if let Some((net, _)) = eval(size) {
+            curve.push(SizePoint { size_usd: size, net_yield: net });
+        }
+    }
+
+    // Optimal = largest curve size with net >= threshold (and at least $100).
+    let mut optimal: Option<(f64, f64)> = None;
+    for p in curve.iter() {
+        if p.size_usd >= 100.0 && p.net_yield >= threshold {
+            optimal = Some((p.size_usd, p.net_yield));
+        }
+    }
+    optimal.map(|(size, yield_at)| (size, yield_at, curve))
+}
+
 pub fn validate_triangle_full(
     book1: &OrderBookLevels,
     book2: &OrderBookLevels,
@@ -297,7 +366,7 @@ pub fn validate_triangle_full(
     // --- Maker-plan alternative: same path with limit orders, 0% taker ---
     let maker_yield = gross_yield - buffer;
 
-    if net_yield < min_net_yield() {
+    if net_yield < min_net_yield_live() {
         return None;
     }
 
@@ -322,6 +391,11 @@ pub fn validate_triangle_full(
 /// Legacy helpers retained for backward compatibility of tests.
 pub fn calculate_weighted_fill_price(levels: &[PriceLevel; 20], target_volume: f64) -> FillResult {
     calculate_weighted_fill(levels, target_volume, false)
+}
+
+/// Live threshold (SettingsSnapshot if attached, else env default 0.25%).
+fn min_net_yield_live() -> f64 {
+    with_settings(|| min_net_yield(), |s| s.min_profit_threshold)
 }
 
 pub fn calculate_net_yield(p1: f64, p2: f64, p3: f64) -> f64 {

@@ -53,7 +53,6 @@ struct Claims {
 #[derive(Clone)]
 struct AppState {
     scanner: Arc<Mutex<Scanner>>,
-    network_manager: Arc<network::NetworkManager>,
     trade_logger: Arc<TradeLogger>,
     telemetry_collector: Arc<TelemetryCollector>,
     ws_pool: Arc<Mutex<WssPool>>,
@@ -63,6 +62,7 @@ struct AppState {
     admin_password: String,
     jwt_secret: String,
     settings: Arc<RwLock<SettingsSnapshot>>,
+    math_engine: Arc<engine::MathEngine>,
 }
 
 fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
@@ -130,8 +130,11 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| format!("{}-jwt-secret", admin_password));
 
     let math_engine = Arc::new(engine::MathEngine::new());
-    let network_manager = Arc::new(network::NetworkManager::new(Arc::clone(&math_engine)));
-    let ws_pool = Arc::clone(&network_manager.ws_pool);
+    // Shared REST client lives on the WS pool so workers, reseeds, and API
+    // handlers all draw from ONE global rate bucket (MEXC IP limit safety).
+    let shared_rest = Arc::new(network::RestClient::new());
+    let mut pool_inst = network::WssPool::new_with_rest(Arc::clone(&math_engine), Arc::clone(&shared_rest));
+    let ws_pool: Arc<Mutex<network::WssPool>> = Arc::new(Mutex::new(pool_inst));
 
     // Seed the pool with an initial USDT-major set; maintenance replaces it within
     // the first hour (or immediately on the first run if we call it eagerly).
@@ -158,7 +161,7 @@ async fn main() -> Result<()> {
     let sqlite = Arc::new(SqlitePersistence::new(Arc::clone(&db)));
     let trade_logger = Arc::new(TradeLogger::new(sqlite));
     let telemetry_collector = Arc::new(TelemetryCollector::new(Arc::clone(&math_engine), Arc::clone(&scanner)));
-    let rest_client = Arc::new(RestClient::new());
+    let rest_client = Arc::clone(&shared_rest);
 
     let (opportunity_sender, mut opportunity_receiver) = broadcast::channel::<Opportunity>(512);
 
@@ -193,8 +196,10 @@ async fn main() -> Result<()> {
     // 4. Eager first maintenance: full whitelist + topology + scanner wiring
     //    (done after WS start so seamless_update works cleanly)
     let maintenance = Arc::new(MaintenanceTask::new(Arc::clone(&rest_client), Arc::clone(&db)));
+    let reseed_task = Arc::new(network::ReseedTask::new(Arc::clone(&math_engine), Arc::clone(&shared_rest)));
     {
-        match maintenance.run(Arc::clone(&ws_pool), Arc::clone(&scanner)).await {
+        let reseed = Arc::clone(&reseed_task);
+        match maintenance.run(Arc::clone(&ws_pool), Arc::clone(&scanner), reseed.clone()).await {
             Ok(()) => tracing::info!("✅ Initial whitelist maintenance completed"),
             Err(e) => tracing::warn!("⚠️ Initial maintenance failed (will retry hourly): {}", e),
         }
@@ -203,7 +208,13 @@ async fn main() -> Result<()> {
         let m = Arc::clone(&maintenance);
         let w = Arc::clone(&ws_pool);
         let s = Arc::clone(&scanner);
-        async move { m.start_scheduler(w, s).await }
+        let reseed = Arc::clone(&reseed_task);
+        async move { m.start_scheduler(w, s, reseed).await }
+    });
+    // Start the shared REST re-seed scheduler (single task, serial, rate-limited)
+    tokio::spawn({
+        let reseed = Arc::clone(&reseed_task);
+        async move { reseed.run().await }
     });
 
     // 5. Scan task — the single mutator of Scanner
@@ -266,7 +277,6 @@ async fn main() -> Result<()> {
     // ---- HTTP API ----
     let state = AppState {
         scanner: Arc::clone(&scanner),
-        network_manager: Arc::clone(&network_manager),
         trade_logger: Arc::clone(&trade_logger),
         telemetry_collector: Arc::clone(&telemetry_collector),
         ws_pool: Arc::clone(&ws_pool),
@@ -276,6 +286,7 @@ async fn main() -> Result<()> {
         admin_password: admin_password.clone(),
         jwt_secret: jwt_secret.clone(),
         settings: shared_settings,
+        math_engine,
     };
 
     let app = Router::new()
@@ -297,6 +308,7 @@ async fn main() -> Result<()> {
         .route("/api/keys", get(get_api_keys_handler))
         .route("/api/keys/delete", post(delete_api_keys_handler))
         .route("/api/book/:sym", get(book_debug_handler))
+        .route("/api/live-books", get(live_books_handler))
         .route("/api/key-tests", get(key_tests_handler))
         .fallback_service(ServeDir::new("frontend/dist"))
         .layer(CorsLayer::permissive())
@@ -329,6 +341,46 @@ async fn telemetry_handler(State(state): State<AppState>) -> Json<Telemetry> {
 }
 
 /// Temporary debug endpoint: dump the math engine's live book for a symbol.
+/// Live books for up to 20 symbols: best bid/ask, last price, top 10 depth levels,
+/// staleness — used by the dashboard opportunity detail page for live prices.
+async fn live_books_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let syms: Vec<String> = params
+        .get("symbols")
+        .map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_uppercase())
+                .filter(|p| !p.is_empty())
+                .take(20)
+                .collect()
+        })
+        .unwrap_or_default();
+    let out: Vec<serde_json::Value> = syms
+        .iter()
+        .map(|sym| {
+            match state.math_engine.get_order_book(sym) {
+                Some(b) => serde_json::json!({
+                    "symbol": sym,
+                    "best_bid": b.bids.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
+                    "best_ask": b.asks.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
+                    "last": b.bids.iter().find(|l| l.price > 0.0).map(|l| l.price)
+                        .or_else(|| b.asks.iter().find(|l| l.price > 0.0).map(|l| l.price))
+                        .unwrap_or(0.0),
+                    "depth": serde_json::json!({
+                        "bids": b.bids.iter().filter(|l| l.price > 0.0).take(10).map(|l| serde_json::json!([l.price, l.volume])).collect::<Vec<_>>(),
+                        "asks": b.asks.iter().filter(|l| l.price > 0.0).take(10).map(|l| serde_json::json!([l.price, l.volume])).collect::<Vec<_>>(),
+                    }),
+                    "stale_ms": chrono::Utc::now().signed_duration_since(b.last_update_time).num_milliseconds(),
+                }),
+                None => serde_json::json!({ "symbol": sym, "error": "no book" }),
+            }
+        })
+        .collect();
+    Json(serde_json::json!({ "books": out }))
+}
+
 async fn book_debug_handler(
     State(state): State<AppState>,
     axum::extract::Path(sym): axum::extract::Path<String>,
@@ -664,12 +716,13 @@ async fn export_csv_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let mut csv = String::from("id,path,net_yield_pct,gross_gap_pct,fee_cost_pct,profit_usd,capacity_usd,gap_age_ms,ticks_survived,fill_score,confidence,maker_plan_yield_pct,slippage_pct,leg1,leg1_entry,leg1_fill,leg2,leg2_entry,leg2_fill,leg3,leg3_entry,leg3_fill,detected_at\n");
+    let mut csv = String::from("id,path,net_yield_pct,gross_gap_pct,fee_cost_pct,profit_usd,capacity_usd,optimal_size_usd,optimal_yield_pct,gap_age_ms,ticks_survived,fill_score,confidence,maker_plan_yield_pct,slippage_pct,leg1,leg1_entry,leg1_fill,leg2,leg2_entry,leg2_fill,leg3,leg3_entry,leg3_fill,detected_at\n");
     for o in &ops {
         csv.push_str(&format!(
-            "{},{},{:.4},{:.4},{:.4},{:.2},{:.2},{},{},{},{:.2},{:.4},{:.4},{},{:.6},{:.6},{},{:.6},{:.6},{},{:.6},{:.6},{}\n",
+            "{},{},{:.4},{:.4},{:.4},{:.2},{:.2},{:.2},{:.4},{},{},{},{:.2},{:.4},{:.4},{},{:.6},{:.6},{},{:.6},{:.6},{},{:.6},{:.6},{}\n",
             o.id, o.path, o.net_yield_percent, o.gross_gap_percent, o.fee_cost_percent,
-            o.estimated_profit_usd, o.capacity_usd, o.gap_age_ms, o.ticks_survived,
+            o.estimated_profit_usd, o.capacity_usd, o.optimal_size_usd, o.optimal_net_yield_percent,
+            o.gap_age_ms, o.ticks_survived,
             o.fill_score, o.confidence, o.maker_plan_yield_percent, o.slippage_percent,
             o.leg1_symbol, o.leg1_entry_price, o.leg1_fill_price,
             o.leg2_symbol, o.leg2_entry_price, o.leg2_fill_price,

@@ -58,19 +58,22 @@ impl MaintenanceTask {
         let mut usdt_pairs: Vec<(String, f64)> = Vec::new();
         let mut valid_symbols = std::collections::HashSet::new();
 
+        let mut exchange_info_ok = false;
         match self.rest_client.get_exchange_info().await {
             Ok(info) => {
                 if let Some(symbols) = info["symbols"].as_array() {
                     for s in symbols {
                         let status = s["status"].as_str().unwrap_or("");
-                        if (status == "TRADING" || status == "1")
+                        if status == "TRADING"
                             && s["isSpotTradingAllowed"].as_bool().unwrap_or(false)
+                            || status == "1" && s["isSpotTradingAllowed"].as_bool().unwrap_or(false)
                         {
                             if let Some(sym) = s["symbol"].as_str() {
                                 valid_symbols.insert(sym.to_string());
                             }
                         }
                     }
+                    exchange_info_ok = true;
                 }
             }
             Err(e) => {
@@ -95,7 +98,7 @@ impl MaintenanceTask {
             if sym.is_empty() {
                 continue;
             }
-            if !sym.ends_with("USDT") || !valid_symbols.contains(&sym) {
+            if !sym.ends_with("USDT") || (!exchange_info_ok && !valid_symbols.contains(&sym)) {
                 continue;
             }
             usdt_pairs.push((sym.clone(), ticker_vols.get(&sym).copied().unwrap_or(0.0)));
@@ -112,7 +115,7 @@ impl MaintenanceTask {
 
         // Always include the deepest majors for topological stability.
         for major in &["BTCUSDT", "ETHUSDT", "SOLUSDT", "USDCUSDT"] {
-            if !whitelist.contains(&major.to_string()) && valid_symbols.contains(*major) {
+            if !whitelist.contains(&major.to_string()) {
                 whitelist.insert(0, major.to_string());
             }
         }
@@ -191,6 +194,7 @@ impl MaintenanceTask {
         &self,
         ws_pool: Arc<Mutex<WssPool>>,
         scanner: Arc<Mutex<Scanner>>,
+        reseed: Arc<crate::network::reseed::ReseedTask>,
     ) -> Result<()> {
         tracing::info!("Starting whitelist maintenance...");
 
@@ -211,6 +215,9 @@ impl MaintenanceTask {
             sc.rebuild_topology(&whitelist);
         }
 
+        // Keep the shared REST re-seed scheduler on the same symbol set
+        reseed.update_symbols(whitelist.clone()).await;
+
         self.persist_whitelist(&whitelist).await;
 
         tracing::info!("Whitelist maintenance completed: {} symbols active", whitelist.len());
@@ -222,13 +229,27 @@ impl MaintenanceTask {
         self: Arc<Self>,
         ws_pool: Arc<Mutex<WssPool>>,
         scanner: Arc<Mutex<Scanner>>,
+        reseed: Arc<crate::network::reseed::ReseedTask>,
     ) {
+        // Failure retry: after a failed cycle, retry in MAINT_RETRY_SECS (5 min
+        // default) instead of waiting the full refresh interval — without a
+        // live whitelist the scanner sees zero loops and finds nothing.
+        let retry_secs: u64 = std::env::var("MAINT_RETRY_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()
+            .unwrap_or(300);
         tokio::spawn(async move {
             loop {
-                if let Err(e) = self.run(Arc::clone(&ws_pool), Arc::clone(&scanner)).await {
-                    tracing::error!("Maintenance failed: {}", e);
+                match self.run(Arc::clone(&ws_pool), Arc::clone(&scanner), reseed.clone()).await {
+                    Ok(()) => {
+                        tracing::info!("Maintenance cycle OK; next full refresh in {}s", refresh_interval_secs());
+                        sleep(Duration::from_secs(refresh_interval_secs())).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Maintenance failed ({}); retrying in {}s", e, retry_secs);
+                        sleep(Duration::from_secs(retry_secs)).await;
+                    }
                 }
-                sleep(Duration::from_secs(refresh_interval_secs())).await;
             }
         });
     }
