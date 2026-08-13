@@ -1,0 +1,5 @@
+[http]
+user-agent = "cargo/1.97.1 (rust agent workaround)"
+
+[registries.crates-io]
+protocol = "sparse"

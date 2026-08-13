@@ -62,6 +62,7 @@ struct AppState {
     opportunity_sender: broadcast::Sender<Opportunity>,
     admin_password: String,
     jwt_secret: String,
+    settings: Arc<RwLock<SettingsSnapshot>>,
 }
 
 fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
@@ -100,7 +101,8 @@ async fn main() -> Result<()> {
 
     // ---- Load (and hot-apply) persisted settings ----
     let settings = db.get_settings().await?;
-    let envs = settings.snapshot_to_envs();
+    let shared_settings: Arc<RwLock<SettingsSnapshot>> = Arc::new(RwLock::new(settings.clone()));
+    let envs = shared_settings.read().await.snapshot_to_envs();
     for (key, value) in envs {
         let _ = std::env::set_var(key, &value);
     }
@@ -144,13 +146,18 @@ async fn main() -> Result<()> {
 
     let scanner = Arc::new(Mutex::new({
         let mut s = Scanner::new(Arc::clone(&math_engine));
-        s.paused = settings.scan_paused;
+        s.paused = shared_settings.read().await.scan_paused;
+        s.settings = Some(Arc::clone(&shared_settings));
+        s.validator.settings = Some(Arc::clone(&shared_settings));
         s
     }));
 
+    // Calculator/validator read the same settings live (no restart needed).
+    engine::calculator::attach_live_settings(Arc::clone(&shared_settings));
+
     let sqlite = Arc::new(SqlitePersistence::new(Arc::clone(&db)));
     let trade_logger = Arc::new(TradeLogger::new(sqlite));
-    let telemetry_collector = Arc::new(TelemetryCollector::new(Arc::clone(&math_engine)));
+    let telemetry_collector = Arc::new(TelemetryCollector::new(Arc::clone(&math_engine), Arc::clone(&scanner)));
     let rest_client = Arc::new(RestClient::new());
 
     let (opportunity_sender, mut opportunity_receiver) = broadcast::channel::<Opportunity>(512);
@@ -202,6 +209,7 @@ async fn main() -> Result<()> {
     // 5. Scan task — the single mutator of Scanner
     let scanner_clone = Arc::clone(&scanner);
     let sender_clone = opportunity_sender.clone();
+    let telemetry_snapshot = Arc::clone(&telemetry_collector);
     tokio::spawn(async move {
         loop {
             let tick_start = std::time::Instant::now();
@@ -213,6 +221,27 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 let interval_ms = locked.tick_interval_ms;
+                // Live settings: tick cadence + persistence requirement.
+                if let Some(ref snap) = locked.settings {
+                    let guard = futures::executor::block_on(snap.read());
+                    let tick_ms = if guard.tick_interval_ms >= 50 {
+                        Some(guard.tick_interval_ms)
+                    } else {
+                        None
+                    };
+                    let req_ticks = if guard.required_ticks > 0 {
+                        Some(guard.required_ticks)
+                    } else {
+                        None
+                    };
+                    drop(guard);
+                    if let Some(ms) = tick_ms {
+                        locked.tick_interval_ms = ms;
+                    }
+                    if let Some(rt) = req_ticks {
+                        locked.validator.required_ticks = rt;
+                    }
+                }
                 let verified = locked.tick();
                 for opp in verified {
                     if sender_clone.receiver_count() > 0 {
@@ -224,6 +253,7 @@ async fn main() -> Result<()> {
             let loop_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
             // NOTE: loop_ms captured post-sleep; true math-loop timing approximated.
             tracing::trace!("scan tick ≈ {:.1}ms", loop_ms);
+            telemetry_snapshot.set_math_loop_ms(loop_ms).await;
         }
     });
 
@@ -245,6 +275,7 @@ async fn main() -> Result<()> {
         opportunity_sender: opportunity_sender.clone(),
         admin_password: admin_password.clone(),
         jwt_secret: jwt_secret.clone(),
+        settings: shared_settings,
     };
 
     let app = Router::new()
@@ -342,10 +373,7 @@ async fn get_settings_handler(
     headers: HeaderMap,
 ) -> Result<Json<SettingsSnapshot>, (StatusCode, String)> {
     check_auth(&state, &headers)?;
-    match state.db.get_settings().await {
-        Ok(s) => Ok(Json(s)),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    }
+    Ok(Json(state.settings.read().await.clone()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -391,8 +419,7 @@ async fn save_settings_handler(
     // Handle pause toggle live
     if let Some(paused) = payload.scan_paused {
         snap.scan_paused = paused;
-        let mut locked = state.scanner.lock().await;
-        locked.paused = paused;
+        state.scanner.lock().await.paused = paused;
         tracing::info!("Scan {} by settings change", if paused { "PAUSED" } else { "RESUMED" });
     }
 
@@ -401,6 +428,13 @@ async fn save_settings_handler(
         .save_settings(&snap)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Hot-apply: update the shared lock so the scanner tick / validator read the
+    // new values immediately (no restart required).
+    {
+        let mut locked = state.settings.write().await;
+        *locked = snap.clone();
+    }
 
     tracing::info!("⚙️ Settings saved: {:?}", serde_json::to_string(&snap).unwrap_or_default());
     Ok(Json("Settings saved and applied".to_string()))

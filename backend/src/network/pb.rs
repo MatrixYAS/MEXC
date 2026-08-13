@@ -81,11 +81,9 @@ pub fn decode_depth_frame(raw: &[u8]) -> Result<PbDepth, &'static str> {
                         }
                     }
                     3 => symbol = Some(utf8(&raw[pos..end])?),
-                    6 | 313 => {
-                        // field 313: observed publicAggreDepths slot on the
-                        // wire. Field 6 is normally the sendTime varint; if we
-                        // land here it already decoded length-delimited, so try
-                        // the depth payload (harmless if it fails).
+                    313 => {
+                        // Field 313: the observed publicAggreDepths slot on the
+                        // wire — the ONLY trusted depth payload location.
                         if let Ok((b, a)) = decode_depth_inner(&raw[pos..end]) {
                             if !b.is_empty() || !a.is_empty() {
                                 bids.extend(b);
@@ -95,18 +93,9 @@ pub fn decode_depth_frame(raw: &[u8]) -> Result<PbDepth, &'static str> {
                         }
                     }
                     _ => {
-                        // After the sendTime varint, the depth payload may sit
-                        // in an untagged/renumbered field; try to decode any
-                        // remaining length-delimited blob as the payload.
-                        if channel.is_some() && !payload_seen {
-                            if let Ok((b, a)) = decode_depth_inner(&raw[pos..end]) {
-                                if !b.is_empty() || !a.is_empty() {
-                                    bids.extend(b);
-                                    asks.extend(a);
-                                    payload_seen = true;
-                                }
-                            }
-                        }
+                        // Unknown length-delimited field: skip. We never guess
+                        // the payload from random blobs — doing so injected
+                        // ghost levels into the book (corrupt ask sides).
                     }
                 }
                 pos = end;

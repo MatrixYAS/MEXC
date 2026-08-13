@@ -11,27 +11,60 @@
 use crate::data::models::{OrderBookLevels, PriceLevel};
 use serde::{Deserialize, Serialize};
 
+/// Live settings handle (set once by main at boot; `None` falls back to env).
+static LIVE_SETTINGS: std::sync::OnceLock<
+    std::sync::Arc<tokio::sync::RwLock<crate::data::models::SettingsSnapshot>>,
+> = std::sync::OnceLock::new();
+
+pub fn attach_live_settings(
+    s: std::sync::Arc<tokio::sync::RwLock<crate::data::models::SettingsSnapshot>>,
+) {
+    let _ = LIVE_SETTINGS.set(s);
+}
+
+fn with_settings<T>(default: impl Fn() -> T, f: impl Fn(&crate::data::models::SettingsSnapshot) -> T) -> T {
+    LIVE_SETTINGS
+        .get()
+        .map(|s| f(&futures::executor::block_on(s.read())))
+        .unwrap_or_else(default)
+}
+
 /// Taker fee per leg (0.05% = MEXC spot reality as of 2026). Configurable via env.
 fn taker_fee() -> f64 {
-    std::env::var("TAKER_FEE")
-        .unwrap_or_else(|_| "0.0005".to_string())
-        .parse()
-        .unwrap_or(0.0005)
+    with_settings(
+        || {
+            std::env::var("TAKER_FEE")
+                .unwrap_or_else(|_| "0.0005".to_string())
+                .parse()
+                .unwrap_or(0.0005)
+        },
+        |s| s.taker_fee,
+    )
 }
 
 /// Slippage buffer added to the profit floor (e.g. 0.05% safety margin).
 fn slippage_buffer() -> f64 {
-    std::env::var("SLIPPAGE_BUFFER")
-        .unwrap_or_else(|_| "0.0005".to_string())
-        .parse()
-        .unwrap_or(0.0005)
+    with_settings(
+        || {
+            std::env::var("SLIPPAGE_BUFFER")
+                .unwrap_or_else(|_| "0.0005".to_string())
+                .parse()
+                .unwrap_or(0.0005)
+        },
+        |s| s.slippage_buffer,
+    )
 }
 
 fn target_volume_usd() -> f64 {
-    std::env::var("TARGET_VOLUME_USD")
-        .unwrap_or_else(|_| "1000.0".to_string())
-        .parse::<f64>()
-        .unwrap_or(1000.0)
+    with_settings(
+        || {
+            std::env::var("TARGET_VOLUME_USD")
+                .unwrap_or_else(|_| "1000.0".to_string())
+                .parse::<f64>()
+                .unwrap_or(1000.0)
+        },
+        |s| s.target_volume_usd,
+    )
 }
 
 fn min_net_yield() -> f64 {
@@ -151,19 +184,20 @@ pub struct FillReport {
     pub liquidity_score: f64,
 }
 
-/// Leg 2 specialist: sell A (quote side) into bids of COINBCOINA (price = A per B,
-/// volume in B). Returns (B received, FillReport).
-fn sell_a_for_b(bids: &[PriceLevel; 20], amount_a: f64) -> (f64, FillResult) {
+/// Leg 2 specialist: BUY B paying A on the ASKS of COINBCOINA (base = COIN_B,
+/// quote = COIN_A, price = A per B, volume in B). Each unit of B costs `price`
+/// units of A. Returns (B received, FillResult).
+fn buy_b_with_a(asks: &[PriceLevel; 20], amount_a: f64) -> (f64, FillResult) {
     let mut remaining_a = amount_a;
     let mut b_received = 0.0_f64;
     let mut a_spent = 0.0_f64;
-    let best = bids
+    let best = asks
         .iter()
         .find(|l| l.price > 0.0 && l.volume > 0.0)
         .map(|l| l.price)
         .unwrap_or(0.0);
 
-    for level in bids.iter() {
+    for level in asks.iter() {
         if level.price <= 0.0 || level.volume <= 0.0 {
             break;
         }
@@ -223,13 +257,13 @@ pub fn validate_triangle_full(
     }
     let amount_a = f1.filled_volume; // A received
 
-    // --- Leg 2: SELL A for B (bids of COINBCOINA) ---
+    // --- Leg 2: BUY B paying A (asks of COINBCOINA) ---
     // MEXC convention: COINBCOINA base=COIN_B, quote=COIN_A; price = A per B.
-    // A bid is an offer to BUY COIN_B paying COIN_A. We hold A and want B, so we
-    // fill these bids as the seller of A (the quote side): each filled B costs
-    // us price units of A, i.e. B_received = A_spent / price. Book volume is in
-    // COIN_B, so we can take up to `volume` B per level.
-    let (amount_b, f2) = sell_a_for_b(&book2.bids, amount_a);
+    // An ask is an offer to SELL COIN_B for COIN_A. We hold A and want B, so we
+    // consume the asks: each unit of B costs `price` units of A, i.e.
+    // B_received = A_spent / price. Book volume is in COIN_B, so we can take up
+    // to `volume` B per level.
+    let (amount_b, f2) = buy_b_with_a(&book2.asks, amount_a);
     if amount_b <= 0.0 || f2.is_low_liquidity {
         return None;
     }
@@ -277,7 +311,7 @@ pub fn validate_triangle_full(
         maker_yield,
         leg1_entry: book1.asks.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
         leg1_fill: f1.fill_price,
-        leg2_entry: book2.bids.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
+        leg2_entry: book2.asks.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
         leg2_fill: f2.fill_price,
         leg3_entry: book3.bids.iter().find(|l| l.price > 0.0).map(|l| l.price).unwrap_or(0.0),
         leg3_fill: f3.fill_price,

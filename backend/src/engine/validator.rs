@@ -39,22 +39,17 @@ impl Default for PersistenceState {
 
 pub struct TriangleValidator {
     persistence_map: HashMap<Uuid, PersistenceState>,
-    min_profit_threshold: f64,
-    required_ticks: u8,
+    pub settings: Option<std::sync::Arc<tokio::sync::RwLock<crate::data::models::SettingsSnapshot>>>,
+    pub required_ticks: u8,
     /// loop identity -> (coin_a, coin_b, pair1, pair2, pair3) for dossier building
     loop_identity: HashMap<Uuid, (String, String, String, String, String)>,
 }
 
 impl TriangleValidator {
     pub fn new(required_ticks: u8) -> Self {
-        let min_profit_threshold = std::env::var("MIN_PROFIT_THRESHOLD")
-            .unwrap_or_else(|_| "0.0025".to_string())
-            .parse::<f64>()
-            .expect("MIN_PROFIT_THRESHOLD must be a valid float");
-
         Self {
             persistence_map: HashMap::new(),
-            min_profit_threshold,
+            settings: None,
             required_ticks,
             loop_identity: HashMap::new(),
         }
@@ -99,7 +94,14 @@ impl TriangleValidator {
 
         match &report {
             Some(r) => {
-                if r.net_yield >= self.min_profit_threshold {
+                let threshold = self
+                    .settings
+                    .as_ref()
+                    .map(|s| {
+                        futures::executor::block_on(s.read()).min_profit_threshold
+                    })
+                    .unwrap_or(0.0025);
+                if r.net_yield >= threshold {
                     state.consecutive_ticks = state.consecutive_ticks.saturating_add(1);
                     // keep the best (highest net yield) report seen in this run
                     if r.net_yield > state.last_net_yield {
@@ -131,7 +133,7 @@ impl TriangleValidator {
             };
 
             let path = format!(
-                "USDT → {} → {} → USDT via {} (BUY) | {} (SELL A for B) | {} (SELL B)",
+                "USDT → {} → {} → USDT via {} (BUY) | {} (BUY B with A) | {} (SELL B)",
                 coin_a, coin_b, pair1, pair2, pair3
             );
 

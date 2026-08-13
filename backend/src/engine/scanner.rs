@@ -39,6 +39,7 @@ pub struct Scanner {
     pub validator: TriangleValidator,
     pub tick_interval_ms: u64,
     pub paused: bool,
+    pub settings: Option<std::sync::Arc<tokio::sync::RwLock<crate::data::models::SettingsSnapshot>>>,
     /// per-loop learning stats: (passed_checks, verified_emissions)
     pub loop_stats: HashMap<Uuid, (u64, u64)>,
     /// cooldown: last emission time per loop to avoid flooding identical
@@ -73,6 +74,7 @@ impl Scanner {
             validator: TriangleValidator::new(max_ticks),
             tick_interval_ms,
             paused: false,
+            settings: None,
             loop_stats: HashMap::new(),
             last_emit: HashMap::new(),
         }
@@ -214,7 +216,7 @@ impl Scanner {
                     opp.gap_age_ms,
                     opp.path,
                     b1.asks.iter().take(3).map(|l| (l.price, l.volume)).collect::<Vec<_>>(),
-                    b2.bids.iter().take(3).map(|l| (l.price, l.volume)).collect::<Vec<_>>(),
+                    b2.asks.iter().take(3).map(|l| (l.price, l.volume)).collect::<Vec<_>>(),
                     b3.bids.iter().take(3).map(|l| (l.price, l.volume)).collect::<Vec<_>>()
                 );
                 verified.push(opp);
@@ -234,17 +236,17 @@ impl Scanner {
 /// prices cannot exceed ~0.5% above 1.0, skip the heavy weighted-fill math.
 fn top_of_book_precheck(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -> Option<()> {
     let best_ask1 = b1.asks.iter().find(|l| l.price > 0.0)?;
-    let best_bid2 = b2.bids.iter().find(|l| l.price > 0.0)?;
+    let best_ask2 = b2.asks.iter().find(|l| l.price > 0.0)?;
     let best_bid3 = b3.bids.iter().find(|l| l.price > 0.0)?;
 
-    // Gross path: USDT -ask1-> A -bid2-> B -bid3-> USDT
-    // ask1 = USDT per A; bid2 (COINBCOINA) = A per B; bid3 = USDT per B.
-    // USDT in: 1/ask1 units of A; B out = (1/ask1)/bid2; USDT out = B*bid3.
-    // gross = bid3 / (ask1 * bid2)
-    if best_bid2.price <= 0.0 {
+    // Gross path: USDT -ask1-> A -ask2-> B -bid3-> USDT
+    // ask1 (COINAUSDT) = USDT per A; ask2 (COINBCOINA) = A per B; bid3 (COINBUSDT) = USDT per B.
+    // USDT in: 1/ask1 units of A; B out = (1/ask1)/ask2; USDT out = B*bid3.
+    // gross = bid3 / (ask1 * ask2)
+    if best_ask2.price <= 0.0 {
         return None;
     }
-    let gross = best_bid3.price / (best_ask1.price * best_bid2.price);
+    let gross = best_bid3.price / (best_ask1.price * best_ask2.price);
     if gross <= 1.005 {
         None
     } else {

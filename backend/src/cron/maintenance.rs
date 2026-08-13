@@ -150,7 +150,6 @@ impl MaintenanceTask {
                     && usdt_set.contains(&format!("{}USDT", coin_a))
                     && usdt_set.contains(&format!("{}USDT", coin_b))
                     && valid_symbols.contains(&cross)
-                    && ticker_vols.get(&cross).copied().unwrap_or(0.0) >= min_cross_vol
                 {
                     whitelist.push(cross);
                     added_crosses += 1;

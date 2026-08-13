@@ -3,6 +3,7 @@
 
 use crate::data::models::Telemetry;
 use crate::engine::MathEngine;
+use crate::engine::scanner::Scanner;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,6 +17,7 @@ pub struct TelemetryCollector {
     start_time: Instant,
     last_math_loop_duration: Mutex<f64>,
     last_stats: Mutex<(usize, usize)>,
+    scanner: Arc<Mutex<Scanner>>,
 }
 
 impl TelemetryCollector {
@@ -23,7 +25,7 @@ impl TelemetryCollector {
         &self.math_engine
     }
 
-    pub fn new(math_engine: Arc<MathEngine>) -> Self {
+    pub fn new(math_engine: Arc<MathEngine>, scanner: Arc<Mutex<Scanner>>) -> Self {
         let mut sys = System::new();
         sys.refresh_all();
         Self {
@@ -32,7 +34,12 @@ impl TelemetryCollector {
             start_time: Instant::now(),
             last_math_loop_duration: Mutex::new(0.0),
             last_stats: Mutex::new((0, 0)),
+            scanner,
         }
+    }
+
+    pub async fn set_math_loop_ms(&self, ms: f64) {
+        *self.last_math_loop_duration.lock().await = ms;
     }
 
     pub async fn collect(&self) -> Telemetry {
@@ -43,7 +50,10 @@ impl TelemetryCollector {
             (sys.global_cpu_usage(), sys.used_memory() / 1024 / 1024)
         };
 
-        let (_, active) = *self.last_stats.lock().await;
+        let active = {
+            let s = self.scanner.lock().await;
+            s.topology.len()
+        };
         let loop_ms = *self.last_math_loop_duration.lock().await;
 
         Telemetry {
@@ -61,18 +71,11 @@ impl TelemetryCollector {
     }
 
     pub async fn start_collector(self: Arc<Self>) {
-        let mut ticker = interval(Duration::from_secs(10));
+        // stats are now computed inline on demand in collect(); keep this task
+        // alive so the collector is not dropped (historical placeholder).
+        let mut ticker = interval(Duration::from_secs(60));
         loop {
             ticker.tick().await;
-            
-            // books live == subscribed symbols; active loops tracked by scanner (separate)
-        *self.last_stats.lock().await = (self.math_engine.book_count(), 0);
-
-            let t = self.collect().await;
-            tracing::debug!(
-                "Telemetry - CPU: {:.1}% | RAM: {}MB | Active Triangles: {}",
-                t.cpu_usage, t.ram_usage_mb, t.active_triangles
-            );
         }
     }
 }
