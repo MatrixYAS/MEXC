@@ -1,135 +1,235 @@
 // backend/src/cron/maintenance.rs
-// Final update per guide 1.8: Full 24h Volume fetch + better Closed Loop validation
+// Full-market whitelist maintenance.
+//
+// Replaces the legacy 18-coin hard-coded list: pulls ALL 24h tickers in ONE
+// call, ranks by USDT quoteVolume, cross-checks symbol existence against
+// exchangeInfo (trading enabled only), and seamlessly swaps the WS pool.
+// Runs every hour (refreshes faster than the old 24h cycle — MEXC markets
+// rotate quickly).
 
 use crate::network::RestClient;
 use crate::network::WssPool;
-use crate::engine::MathEngine;
+use crate::engine::scanner::Scanner;
+use crate::data::Database;
 use anyhow::Result;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use tracing;
 
-// Externalized configuration
-fn get_min_24h_volume() -> f64 {
+fn max_whitelist() -> usize {
+    std::env::var("MAX_WHITELIST")
+        .unwrap_or_else(|_| "300".to_string())
+        .parse()
+        .unwrap_or(300)
+}
+
+fn min_volume_24h() -> f64 {
     std::env::var("MIN_VOLUME_24H")
-        .unwrap_or_else(|_| "500000.0".to_string())
-        .parse::<f64>()
-        .expect("MIN_VOLUME_24H must be a valid float")
+        .unwrap_or_else(|_| "1000000.0".to_string())
+        .parse()
+        .unwrap_or(1_000_000.0)
+}
+
+fn refresh_interval_secs() -> u64 {
+    std::env::var("WHITELIST_REFRESH_SECS")
+        .unwrap_or_else(|_| "3600".to_string())
+        .parse()
+        .unwrap_or(3600)
 }
 
 pub struct MaintenanceTask {
     rest_client: Arc<RestClient>,
-    math_engine: Arc<MathEngine>,
-    ws_pool: Arc<tokio::sync::Mutex<WssPool>>,
+    db: Arc<Database>,
 }
 
 impl MaintenanceTask {
-    pub fn new(
-        rest_client: Arc<RestClient>,
-        math_engine: Arc<MathEngine>,
-        ws_pool: Arc<tokio::sync::Mutex<WssPool>>,
-    ) -> Self {
-        Self {
-            rest_client,
-            math_engine,
-            ws_pool,
-        }
+    pub fn new(rest_client: Arc<RestClient>, db: Arc<Database>) -> Self {
+        Self { rest_client, db }
     }
 
-    /// Run the full 24h maintenance cycle
-    pub async fn run(&self) -> Result<()> {
-        tracing::info!("Starting 24h Adaptive Maintenance...");
+    /// Build the volume-ranked whitelist from the full ticker feed.
+    pub async fn build_whitelist(&self) -> Result<Vec<String>> {
+        let tickers = self.rest_client.get_all_tickers().await?;
+        let max = max_whitelist();
+        let min_vol = min_volume_24h();
 
-        let min_volume = get_min_24h_volume();
+        // Collect USDT pairs with volume, plus a set of all valid trading symbols
+        // from exchangeInfo to filter out delisted/invalid pairs.
+        let mut usdt_pairs: Vec<(String, f64)> = Vec::new();
+        let mut valid_symbols = std::collections::HashSet::new();
 
-        // Step 1: Fetch high-volume coins with real API
-        let high_volume_coins = self.fetch_high_volume_coins(min_volume).await?;
-        tracing::info!("Found {} coins with > ${} 24h volume", high_volume_coins.len(), min_volume);
-
-        // Step 2: Build valid whitelist with improved Closed Loop validation
-        let new_whitelist = self.build_valid_whitelist(high_volume_coins).await?;
-
-        tracing::info!("New whitelist ready with {} coins", new_whitelist.len());
-
-        // Step 3: Seamless swap (zero downtime)
-        self.perform_seamless_swap(new_whitelist).await?;
-
-        tracing::info!("24h Maintenance completed successfully.");
-        Ok(())
-    }
-
-    /// Fetch coins with sufficient 24h volume
-    async fn fetch_high_volume_coins(&self, min_volume: f64) -> Result<Vec<String>> {
-        let popular_symbols = vec![
-            "BTCUSDT", "ETHUSDT", "SOLUSDT", "PEPEUSDT", "DOGEUSDT", "XRPUSDT",
-            "ADAUSDT", "BNBUSDT", "TONUSDT", "TRXUSDT", "AVAXUSDT", "SHIBUSDT",
-            "SUIUSDT", "NEARUSDT", "APTUSDT", "OPUSDT", "ARBUSDT", "WIFUSDT",
-        ];
-
-        let mut valid = Vec::new();
-
-        for symbol in popular_symbols {
-            match self.rest_client.get_24h_ticker(symbol).await {
-                Ok(ticker) => {
-                    if let Some(vol_str) = ticker["quoteVolume"].as_str() {
-                        if let Ok(vol) = vol_str.parse::<f64>() {
-                            if vol > min_volume {
-                                valid.push(symbol.to_string());
+        match self.rest_client.get_exchange_info().await {
+            Ok(info) => {
+                if let Some(symbols) = info["symbols"].as_array() {
+                    for s in symbols {
+                        let status = s["status"].as_str().unwrap_or("");
+                        if (status == "TRADING" || status == "1")
+                            && s["isSpotTradingAllowed"].as_bool().unwrap_or(false)
+                        {
+                            if let Some(sym) = s["symbol"].as_str() {
+                                valid_symbols.insert(sym.to_string());
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch volume for {}: {}", symbol, e);
+            }
+            Err(e) => {
+                tracing::warn!("exchangeInfo unavailable ({}); falling back to tickers only", e);
+            }
+        }
+
+        let mut ticker_vols = std::collections::HashMap::new();
+        for t in tickers {
+            let sym = t["symbol"].as_str().unwrap_or("").to_string();
+            let vol: f64 = t["quoteVolume"]
+                .as_f64()
+                .or_else(|| {
+                    t["quoteVolume"]
+                        .as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
+                })
+                .unwrap_or(0.0);
+            if vol > 0.0 {
+                ticker_vols.insert(sym.clone(), vol);
+            }
+            if sym.is_empty() {
+                continue;
+            }
+            if !sym.ends_with("USDT") || !valid_symbols.contains(&sym) {
+                continue;
+            }
+            usdt_pairs.push((sym.clone(), ticker_vols.get(&sym).copied().unwrap_or(0.0)));
+        }
+
+        usdt_pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut whitelist: Vec<String> = usdt_pairs
+            .into_iter()
+            .filter(|(_, vol)| *vol >= min_vol)
+            .take(max)
+            .map(|(sym, _)| sym)
+            .collect();
+
+        // Always include the deepest majors for topological stability.
+        for major in &["BTCUSDT", "ETHUSDT", "SOLUSDT", "USDCUSDT"] {
+            if !whitelist.contains(&major.to_string()) && valid_symbols.contains(*major) {
+                whitelist.insert(0, major.to_string());
+            }
+        }
+
+        // ---- Cross-pair expansion ----
+        // Triangle closing legs (e.g. ETHSOL, BTCSOL) are NOT in the top-300 by
+        // USDT quoteVolume, but they ARE essential for triangulation. For every
+        // ordered pair of USDT-quote coins in the whitelist, add the reverse
+        // cross pair (COIN_B + COIN_A) if it is a valid TRADING symbol.
+        let usdt_coins: Vec<String> = whitelist
+            .iter()
+            .filter(|s| s.ends_with("USDT") && s.len() > 4)
+            .map(|s| s.trim_end_matches("USDT").to_string())
+            .collect();
+        let usdt_set: std::collections::HashSet<String> = whitelist
+            .iter()
+            .filter(|s| s.ends_with("USDT") && s.len() > 4)
+            .cloned()
+            .collect();
+        // Minimum 24h volume on the closing leg: 1% of the min whitelist
+        // volume guarantees the leg can actually move the arbitrage amount.
+        let min_cross_vol = (min_vol * 0.01).max(5000.0);
+        let mut added_crosses = 0;
+        for coin_a in &usdt_coins {
+            for coin_b in &usdt_coins {
+                if coin_a == coin_b {
+                    continue;
+                }
+                let cross = format!("{}{}", coin_b, coin_a);
+                // Only add the closing leg when BOTH USDT legs are real trading
+                // pairs on MEXC and the cross itself is a valid trading symbol.
+                // This filters out junk coins whose names are prefixes of other
+                // symbols (e.g. coin "A" from "ABTC" / "AUSDT").
+                if !whitelist.contains(&cross)
+                    && usdt_set.contains(&format!("{}USDT", coin_a))
+                    && usdt_set.contains(&format!("{}USDT", coin_b))
+                    && valid_symbols.contains(&cross)
+                    && ticker_vols.get(&cross).copied().unwrap_or(0.0) >= min_cross_vol
+                {
+                    whitelist.push(cross);
+                    added_crosses += 1;
                 }
             }
         }
-
-        Ok(valid)
-    }
-
-    /// Improved Closed Loop validation
-    async fn build_valid_whitelist(&self, candidates: Vec<String>) -> Result<Vec<String>> {
-        let mut whitelist = vec!["USDT".to_string()];
-
-        for coin in candidates {
-            let base = coin.replace("USDT", "");
-
-            // Basic Closed Loop: USDT -> BASE -> COIN -> USDT
-            // In a more advanced version we would check actual pair existence via API
-            if coin.ends_with("USDT") && !base.is_empty() {
-                whitelist.push(coin.clone());
-            }
+        if added_crosses > 0 {
+            tracing::info!(
+                "Cross-pair expansion added {} closing-leg symbols (whitelist now {})",
+                added_crosses,
+                whitelist.len()
+            );
         }
 
-        // Prioritize Innovation Zone coins (longer symbols tend to be newer/more inefficient)
-        whitelist.sort_by(|a, b| b.len().cmp(&a.len()));
-
-        // Limit to ~300 coins max
-        whitelist.truncate(300);
-
+        tracing::info!(
+            "Whitelist built: {} symbols (min vol ${}, top {})",
+            whitelist.len(),
+            min_vol,
+            max
+        );
         Ok(whitelist)
     }
 
-    /// Perform seamless symbol update
-    async fn perform_seamless_swap(&self, new_symbols: Vec<String>) {
-        let mut pool_guard = self.ws_pool.lock().await;
-        
-        tracing::info!("Executing Seamless Swap with {} symbols", new_symbols.len());
-        
-        pool_guard.seamless_update(new_symbols).await;
-
-        tracing::info!("Seamless swap completed - new connections stable");
+    /// Persist the current whitelist into settings DB for UI visibility.
+    async fn persist_whitelist(&self, symbols: &[String]) {
+        for sym in symbols {
+            let _ = sqlx::query(
+                "INSERT INTO whitelist_coins (symbol, volume_24h, path_count, is_active, last_updated) VALUES (?, 0, 0, 1, ?) ON CONFLICT(symbol) DO UPDATE SET is_active=1, last_updated=excluded.last_updated"
+            )
+            .bind(sym)
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(self.db.pool())
+            .await;
+        }
     }
 
-    /// Schedule every 24 hours
-    pub async fn start_scheduler(self: Arc<Self>) {
+    /// Run one maintenance cycle: build whitelist + swap WS pool + rebuild topology.
+    pub async fn run(
+        &self,
+        ws_pool: Arc<Mutex<WssPool>>,
+        scanner: Arc<Mutex<Scanner>>,
+    ) -> Result<()> {
+        tracing::info!("Starting whitelist maintenance...");
+
+        let whitelist = self.build_whitelist().await?;
+        if whitelist.len() < 10 {
+            anyhow::bail!("Whitelist too small ({} symbols); keeping previous state", whitelist.len());
+        }
+
+        // Swap WebSocket subscriptions
+        {
+            let mut pool = ws_pool.lock().await;
+            pool.seamless_update(whitelist.clone()).await;
+        }
+
+        // Rebuild USDT loop topology for the scanner
+        {
+            let mut sc = scanner.lock().await;
+            sc.rebuild_topology(&whitelist);
+        }
+
+        self.persist_whitelist(&whitelist).await;
+
+        tracing::info!("Whitelist maintenance completed: {} symbols active", whitelist.len());
+        Ok(())
+    }
+
+    /// Schedule periodic maintenance.
+    pub async fn start_scheduler(
+        self: Arc<Self>,
+        ws_pool: Arc<Mutex<WssPool>>,
+        scanner: Arc<Mutex<Scanner>>,
+    ) {
         tokio::spawn(async move {
             loop {
-                if let Err(e) = self.run().await {
-                    tracing::error!("Maintenance task failed: {}", e);
+                if let Err(e) = self.run(Arc::clone(&ws_pool), Arc::clone(&scanner)).await {
+                    tracing::error!("Maintenance failed: {}", e);
                 }
-                sleep(Duration::from_secs(24 * 60 * 60)).await;
+                sleep(Duration::from_secs(refresh_interval_secs())).await;
             }
         });
     }

@@ -20,7 +20,15 @@ impl CleanerTask {
     pub async fn run(&self) -> anyhow::Result<u64> {
         tracing::info!("Starting database cleanup (pruning old logs)...");
         
-        let deleted_count = self.trade_logger.prune_old_logs().await?;
+        let retention = std::env::var("RETENTION_DAYS")
+            .unwrap_or_else(|_| "7".to_string())
+            .parse::<i32>()
+            .unwrap_or(7);
+        if retention <= 0 {
+            tracing::debug!("Retention set to keep-forever; nothing pruned");
+            return Ok(0);
+        }
+        let deleted_count = self.trade_logger.prune_old_logs(retention).await?;
         
         if deleted_count > 0 {
             tracing::info!("✅ Cleaned up {} old opportunities from SQLite", deleted_count);
@@ -33,7 +41,7 @@ impl CleanerTask {
 
     /// Start the daily cleaner scheduler
     pub async fn start_scheduler(self: Arc<Self>) {
-        let mut ticker = interval(Duration::from_secs(24 * 60 * 60)); // Every 24 hours
+        let mut ticker = interval(Duration::from_secs(6 * 60 * 60)); // Every 6 hours
 
         // Run once immediately on startup
         if let Err(e) = self.run().await {

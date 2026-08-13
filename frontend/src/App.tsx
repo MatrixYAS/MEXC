@@ -8,6 +8,7 @@ import LivePulse from './components/LivePulse';
 import VerifiedExecutions from './components/VerifiedExecutions';
 import MarketWhitelist from './components/MarketWhitelist';
 import SystemHealth from './components/SystemHealth';
+import SettingsPage from './components/SettingsPage';
 
 function App() {
   const [isDark, setIsDark] = useState(true);
@@ -48,8 +49,9 @@ function App() {
         body: JSON.stringify({ password: passwordInput }),
       });
 
-      if (res.ok) {
-        localStorage.setItem('authToken', 'authenticated');
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('authToken', data.token);
         setIsAuthenticated(true);
         setPasswordInput('');
       } else {
@@ -127,6 +129,7 @@ function App() {
                 <NavLink to="/verified">Verified Executions</NavLink>
                 <NavLink to="/whitelist">Market Maintenance</NavLink>
                 <NavLink to="/health">System Health</NavLink>
+                <NavLink to="/settings">Settings</NavLink>
               </div>
 
               <div className="flex items-center gap-4">
@@ -148,6 +151,7 @@ function App() {
             <Route path="/verified" element={<VerifiedExecutions />} />
             <Route path="/whitelist" element={<MarketWhitelist />} />
             <Route path="/health" element={<SystemHealth />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

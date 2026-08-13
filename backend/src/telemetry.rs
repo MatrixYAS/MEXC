@@ -19,6 +19,10 @@ pub struct TelemetryCollector {
 }
 
 impl TelemetryCollector {
+    pub fn engine(&self) -> &Arc<MathEngine> {
+        &self.math_engine
+    }
+
     pub fn new(math_engine: Arc<MathEngine>) -> Self {
         let mut sys = System::new();
         sys.refresh_all();
@@ -61,8 +65,8 @@ impl TelemetryCollector {
         loop {
             ticker.tick().await;
             
-            let stats = self.math_engine.get_stats().await;
-            *self.last_stats.lock().await = stats;
+            // books live == subscribed symbols; active loops tracked by scanner (separate)
+        *self.last_stats.lock().await = (self.math_engine.book_count(), 0);
 
             let t = self.collect().await;
             tracing::debug!(

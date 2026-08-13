@@ -33,6 +33,11 @@ impl WssPool {
         self.current_symbols = symbols;
     }
 
+    /// Read the currently subscribed symbol set
+    pub fn current_symbols(&self) -> &[String] {
+        &self.current_symbols
+    }
+
     /// Spawn all workers with their assigned symbols
     pub async fn start(&mut self) {
         self.stop().await; // Clean shutdown of old workers

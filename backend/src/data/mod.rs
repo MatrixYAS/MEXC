@@ -7,9 +7,9 @@ pub mod db;
 pub use models::{
     OrderBookLevels,
     PriceLevel,
-    Triangle,
     Opportunity,
-    WhitelistCoin,
+    SettingsSnapshot,
+    KeyTestResult,
     Telemetry,
     HealthResponse,
     ApiKeys,        // Added for API key management

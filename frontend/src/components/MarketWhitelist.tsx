@@ -26,10 +26,10 @@ export default function MarketWhitelist() {
       try {
         const symbols = await api.whitelist();
         // Stable data based on index (no random)
-        fetchedCoins = symbols.map((symbol, index) => ({
+        fetchedCoins = symbols.map((symbol) => ({
           symbol,
-          volume_24h: 150_000_000 + (index * 75_000_000),
-          path_count: 4 + (index % 12),
+          volume_24h: 0,
+          path_count: 0,
           is_active: true,
         }));
       } catch (e) {

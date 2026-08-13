@@ -45,8 +45,8 @@ impl TradeLogger {
         self.persistence.get_today_stats().await
     }
 
-    pub async fn prune_old_logs(&self) -> Result<u64> {
-        self.persistence.prune_old_logs().await
+    pub async fn prune_old_logs(&self, retention_days: i32) -> Result<u64> {
+        self.persistence.prune_old_logs(retention_days).await
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -75,5 +75,9 @@ impl TradeLogger {
     // NEW HELPER: Allow main.rs to access the underlying Database if needed
     pub fn get_db(&self) -> Arc<Database> {
         self.persistence.get_db()
+    }
+
+    pub fn persistence(&self) -> &Arc<SqlitePersistence> {
+        &self.persistence
     }
 }

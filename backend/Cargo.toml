@@ -1,6 +1,6 @@
 [package]
 name = "mexc-ghost-hunter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -10,16 +10,13 @@ tokio-util = "0.7"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # WebSocket
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tungstenite = "0.24"
-futures-util = { version = "0.3", features = ["sink", "stream"] }
+futures-util = { version = "0.3", features = ["sink"] }
 futures = "0.3"
 
 # HTTP Client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-
-# Rate Limiter
-governor = { version = "0.6", features = ["std", "jitter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 
 # Lock-Free & Performance
 dashmap = "6.0"
@@ -34,8 +31,8 @@ sqlx = { version = "0.8", features = [
     "tls-rustls",
     "sqlite",
     "chrono",
+    "uuid",
     "macros",
-    "migrate"
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -59,6 +56,13 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 url = "2.5"
 base64 = "0.22"
 rand = "0.8"
+
+# Encryption & Auth
+aes-gcm = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+jsonwebtoken = "9"
+hex = "0.4"
 
 [profile.release]
 opt-level = 3

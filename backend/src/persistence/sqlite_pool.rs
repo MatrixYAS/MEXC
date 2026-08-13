@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct SqlitePersistence {
-    db: Arc<Database>,
+    pub(crate) db: Arc<Database>,
     batch_buffer: Arc<Mutex<Vec<Opportunity>>>,
 }
 
@@ -44,7 +44,7 @@ impl SqlitePersistence {
         let mut written = 0;
 
         for opp in to_write {
-            if let Err(e) = self.db.log_opportunity(opp).await {
+            if let Err(e) = self.db.log_opportunity(&opp).await {
                 tracing::error!("Failed to log opportunity: {}", e);
             } else {
                 written += 1;
@@ -56,19 +56,23 @@ impl SqlitePersistence {
 
     /// Direct log (fallback)
     pub async fn log_opportunity(&self, opportunity: Opportunity) -> Result<()> {
-        self.db.log_opportunity(opportunity).await
+        self.db.log_opportunity(&opportunity).await
     }
 
     pub async fn get_recent_opportunities(&self, limit: i64) -> Result<Vec<Opportunity>> {
         self.db.get_recent_opportunities(limit).await
     }
 
+    pub async fn get_all_opportunities(&self) -> Result<Vec<Opportunity>> {
+        self.db.get_all_opportunities().await
+    }
+
     pub async fn get_today_stats(&self) -> Result<(i64, f64, f64)> {
         self.db.get_today_stats().await
     }
 
-    pub async fn prune_old_logs(&self) -> Result<u64> {
-        self.db.prune_old_logs().await
+    pub async fn prune_old_logs(&self, retention_days: i32) -> Result<u64> {
+        self.db.prune_old_logs(retention_days).await
     }
 
     // NEW HELPER: Expose underlying Database (required by main.rs)

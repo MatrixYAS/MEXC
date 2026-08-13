@@ -1,24 +1,27 @@
 // backend/src/engine/mod.rs
-// Updated with DashMap for high-performance order book updates (no full clone on every tick)
+// Lock-free order book store (DashMap) + Scanner coordination.
+//
+// The Scanner (triangle enumeration + persistence filter) is owned by the single
+// scan task as Mutex<Scanner> in main.rs — it is NOT accessed through MathEngine.
+// MathEngine remains the lock-free book store shared with the WebSocket workers.
 
-use crate::data::models::{OrderBookLevels, Triangle};
-use crate::engine::validator::TriangleValidator;
+use crate::data::models::OrderBookLevels;
 use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use uuid::Uuid;
 
-// Central Math Engine with DashMap for lock-free, high-performance access
+pub mod calculator;
+pub mod scanner;
+pub mod validator;
+
+/// Central Math Engine with DashMap for lock-free, high-performance access
 pub struct MathEngine {
-    pub order_books: Arc<DashMap<String, OrderBookLevels>>,  // Changed from HashMap + arc-swap
-    validator: RwLock<TriangleValidator>,
+    pub order_books: Arc<DashMap<String, OrderBookLevels>>,
 }
 
 impl MathEngine {
     pub fn new() -> Self {
         Self {
             order_books: Arc::new(DashMap::new()),
-            validator: RwLock::new(TriangleValidator::new()),
         }
     }
 
@@ -32,42 +35,18 @@ impl MathEngine {
         self.order_books.get(symbol).map(|r| *r)
     }
 
-    /// Main hot-path function: Try to find and validate a persistent triangle
-    pub async fn process_triangle(
-        &self,
-        leg1: &str,
-        leg2: &str,
-        leg3: &str,
-    ) -> Option<Triangle> {
-        let book1 = self.order_books.get(leg1)?.clone();
-        let book2 = self.order_books.get(leg2)?.clone();
-        let book3 = self.order_books.get(leg3)?.clone();
-
-        let triangle_id = Uuid::new_v5(
-            &Uuid::NAMESPACE_URL,
-            format!("{}-{}-{}", leg1, leg2, leg3).as_bytes()
-        );
-
-        let mut validator = self.validator.write().await;
-        validator.validate_persistent(
-            triangle_id,
-            &book1,
-            &book2,
-            &book3,
-        )
+    /// Number of live books (for telemetry)
+    pub fn book_count(&self) -> usize {
+        self.order_books.len()
     }
 
-    pub async fn cleanup(&self) {
-        let mut validator = self.validator.write().await;
-        validator.cleanup_old_entries(tokio::time::Duration::from_secs(60));
-    }
-
-    pub async fn get_stats(&self) -> (usize, usize) {
-        let validator = self.validator.read().await;
-        validator.get_stats()
+    /// Remove books for symbols no longer subscribed
+    pub fn drop_symbols(&self, keep: &[String]) {
+        self.order_books.retain(|k, _| keep.contains(k));
     }
 }
 
 // Re-exports
-pub use crate::engine::calculator::{calculate_weighted_fill_price, calculate_net_yield, validate_triangle};
+pub use crate::engine::calculator::{calculate_weighted_fill_price, calculate_net_yield, validate_triangle, validate_triangle_full, FillReport};
+pub use crate::engine::scanner::Scanner;
 pub use crate::engine::validator::TriangleValidator;

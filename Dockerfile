@@ -15,12 +15,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # === Stage 2: Build Rust Backend ===
-FROM rust:1.80-alpine AS rust-builder
+FROM rust:1.84-alpine AS rust-builder
 
 WORKDIR /app/backend
 
-# System dependencies
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig
+# System dependencies (musl + pkg-config for sysinfo crate; openssl-dev NOT needed — TLS is rustls-only)
+RUN apk add --no-cache musl-dev pkg-config perl make
 
 # Cache dependencies (layer caching)
 COPY backend/Cargo.toml backend/Cargo.lock* ./
@@ -62,10 +62,10 @@ RUN mkdir -p /data && \
 USER mexc
 
 # Expose port (configurable)
-EXPOSE 8080
+EXPOSE 7860
 
 # Environment variables (production defaults, can be overridden)
-ENV PORT=8080 \
+ENV PORT=7860 \
     RUST_LOG=info \
     RUST_BACKTRACE=1 \
     DATA_DIR=/data \

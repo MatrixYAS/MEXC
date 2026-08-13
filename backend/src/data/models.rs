@@ -1,10 +1,77 @@
 // backend/src/data/models.rs
-// Updated with ApiKeys and ApiKeyRequest as required by the guide
+// Full data model: lock-free books, enriched Opportunity dossier (15+ fields),
+// application Settings (all configurable in-app), and credential test results.
 
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
+use uuid::Uuid;
+
+fn str_to_uuid(v: String) -> Uuid {
+    Uuid::parse_str(&v).unwrap_or_else(|_| Uuid::nil())
+}
+
+fn str_to_dt(v: String) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(&v)
+        .map(|d| d.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
+impl Opportunity {
+    pub fn from_row(r: &SqliteRow) -> Self {
+        Self {
+            id: str_to_uuid(r.get(0)),
+            triangle_id: str_to_uuid(r.get(1)),
+            path: r.get(2),
+            net_yield_percent: r.get(3),
+            gross_gap_percent: r.get(4),
+            fee_cost_percent: r.get(5),
+            estimated_profit_usd: r.get(6),
+            capacity_usd: r.get(7),
+            gap_age_ms: r.get(8),
+            ticks_survived: r.get(9),
+            fill_score: r.get(10),
+            staleness_ms: r.get(11),
+            confidence: r.get(12),
+            maker_plan_yield_percent: r.get(13),
+            slippage_percent: r.get(14),
+            leg1_symbol: r.get(15),
+            leg1_entry_price: r.get(16),
+            leg1_fill_price: r.get(17),
+            leg2_symbol: r.get(18),
+            leg2_entry_price: r.get(19),
+            leg2_fill_price: r.get(20),
+            leg3_symbol: r.get(21),
+            leg3_entry_price: r.get(22),
+            leg3_fill_price: r.get(23),
+            detected_at: str_to_dt(r.get(24)),
+            is_executed: r.get(25),
+        }
+    }
+}
+
+impl KeyTestResult {
+    pub fn from_row(r: &SqliteRow) -> Self {
+        Self {
+            checked_at: str_to_dt(r.get(0)),
+            test_name: r.get(1),
+            passed: r.get(2),
+            detail: r.get(3),
+        }
+    }
+}
+
+impl ApiKeys {
+    pub fn from_row(r: &SqliteRow) -> Self {
+        Self {
+            id: r.get(0),
+            api_key: r.get(1),
+            secret_key: r.get(2),
+            created_at: str_to_dt(r.get(3)),
+        }
+    }
+}
 
 // =============================================
 // Order Book Models (Performance Critical)
@@ -43,7 +110,9 @@ impl Default for OrderBookLevels {
 
 impl OrderBookLevels {
     pub fn is_stale(&self, max_age_ms: i64) -> bool {
-        let age = Utc::now().signed_duration_since(self.last_update_time).num_milliseconds();
+        let age = Utc::now()
+            .signed_duration_since(self.last_update_time)
+            .num_milliseconds();
         age > max_age_ms
     }
 
@@ -53,129 +122,169 @@ impl OrderBookLevels {
 }
 
 // =============================================
-// Triangle / Arbitrage Path Models
+// Opportunity Log — the 15-field trade dossier
 // =============================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Triangle {
-    pub id: Uuid,
-    pub leg1: String,
-    pub leg2: String,
-    pub leg3: String,
-    pub net_yield: f64,
-    pub effective_capacity: f64,
-    pub gap_age_ms: i64,
-    pub fill_score: String,
-    pub created_at: DateTime<Utc>,
-    pub is_verified: bool,
-}
-
-impl Triangle {
-    pub fn new(leg1: String, leg2: String, leg3: String, net_yield: f64, effective_capacity: f64) -> Self {
-        let now = Utc::now();
-        Self {
-            id: Uuid::new_v4(),
-            leg1,
-            leg2,
-            leg3,
-            net_yield,
-            effective_capacity,
-            gap_age_ms: 0,
-            fill_score: "C".to_string(),
-            created_at: now,
-            is_verified: false,
-        }
-    }
-
-    pub fn path_string(&self) -> String {
-        format!("{} → {} → {} → {}", 
-            self.leg1.split('_').next().unwrap_or(""),
-            self.leg2.split('_').next().unwrap_or(""),
-            self.leg3.split('_').next().unwrap_or(""),
-            self.leg1.split('_').next().unwrap_or("")
-        )
-    }
-}
-
-// =============================================
-// Opportunity Log (Stored in SQLite)
-// =============================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Opportunity {
     pub id: Uuid,
     pub triangle_id: Uuid,
+
     pub path: String,
     pub net_yield_percent: f64,
+    pub gross_gap_percent: f64,
+    pub fee_cost_percent: f64,
+    pub estimated_profit_usd: f64,
     pub capacity_usd: f64,
     pub gap_age_ms: i64,
+    pub ticks_survived: i32,
     pub fill_score: String,
+    pub staleness_ms: i64,
+    pub confidence: f64,
+    pub maker_plan_yield_percent: f64,
+    pub slippage_percent: f64,
+
+    pub leg1_symbol: String,
+    pub leg1_entry_price: f64,
+    pub leg1_fill_price: f64,
+    pub leg2_symbol: String,
+    pub leg2_entry_price: f64,
+    pub leg2_fill_price: f64,
+    pub leg3_symbol: String,
+    pub leg3_entry_price: f64,
+    pub leg3_fill_price: f64,
+
     pub detected_at: DateTime<Utc>,
     pub is_executed: bool,
 }
 
-impl Opportunity {
-    pub fn from_triangle(triangle: &Triangle) -> Self {
+// =============================================
+// Settings — everything configurable in-app
+// =============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSetting {
+    pub key: String,
+    pub value: String,
+}
+
+/// Canonical settings + defaults. Kept in sync with frontend Settings page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettingsSnapshot {
+    pub min_profit_threshold: f64,   // e.g. 0.0025  (0.25% net after fees+buffer)
+    pub taker_fee: f64,              // e.g. 0.0005  (0.05%)
+    pub slippage_buffer: f64,        // e.g. 0.0005
+    pub target_volume_usd: f64,      // discovery size, e.g. 1000
+    pub tick_interval_ms: u64,       // e.g. 50
+    pub required_ticks: u8,          // e.g. 3
+    pub max_whitelist: usize,        // e.g. 300
+    pub min_24h_volume_usd: f64,     // e.g. 1_000_000
+    pub retention_days: i32,         // e.g. 7, 0 = forever
+    pub scan_paused: bool,
+    pub updated_at: String,
+}
+
+impl Default for SettingsSnapshot {
+    fn default() -> Self {
         Self {
-            id: Uuid::new_v4(),
-            triangle_id: triangle.id,
-            path: triangle.path_string(),
-            net_yield_percent: triangle.net_yield * 100.0,
-            capacity_usd: triangle.effective_capacity,
-            gap_age_ms: triangle.gap_age_ms,
-            fill_score: triangle.fill_score.clone(),
-            detected_at: Utc::now(),
-            is_executed: false,
+            min_profit_threshold: 0.0025,
+            taker_fee: 0.0005,
+            slippage_buffer: 0.0005,
+            target_volume_usd: 1000.0,
+            tick_interval_ms: 50,
+            required_ticks: 3,
+            max_whitelist: 300,
+            min_24h_volume_usd: 1_000_000.0,
+            retention_days: 7,
+            scan_paused: false,
+            updated_at: String::new(),
         }
     }
 }
 
-// =============================================
-// Whitelist Coin Model
-// =============================================
+impl SettingsSnapshot {
+    pub const KEYS: &'static [&'static str] = &[
+        "min_profit_threshold",
+        "taker_fee",
+        "slippage_buffer",
+        "target_volume_usd",
+        "tick_interval_ms",
+        "required_ticks",
+        "max_whitelist",
+        "min_24h_volume_usd",
+        "retention_days",
+        "scan_paused",
+    ];
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct WhitelistCoin {
-    pub symbol: String,
-    pub volume_24h: f64,
-    pub path_count: i32,
-    pub is_active: bool,
-    pub last_updated: DateTime<Utc>,
-}
-
-impl WhitelistCoin {
-    pub fn new(symbol: String, volume_24h: f64) -> Self {
-        Self {
-            symbol,
-            volume_24h,
-            path_count: 0,
-            is_active: true,
-            last_updated: Utc::now(),
+    /// Validate values before saving (called by the API handler).
+    pub fn validate(&self) -> Result<(), String> {
+        if !(0.0001..=0.1).contains(&self.min_profit_threshold) {
+            return Err("min_profit_threshold must be 0.0001-0.1".into());
         }
+        if !(0.0..=0.002).contains(&self.taker_fee) {
+            return Err("taker_fee must be 0-0.002 (0-0.2%)".into());
+        }
+        if !(0.0..=0.01).contains(&self.slippage_buffer) {
+            return Err("slippage_buffer must be 0-0.01".into());
+        }
+        if !(10.0..=100_000.0).contains(&self.target_volume_usd) {
+            return Err("target_volume_usd must be 10-100000".into());
+        }
+        if !(10..=500).contains(&self.tick_interval_ms) {
+            return Err("tick_interval_ms must be 10-500".into());
+        }
+        if !(2..=10).contains(&self.required_ticks) {
+            return Err("required_ticks must be 2-10".into());
+        }
+        if !(10..=1000).contains(&self.max_whitelist) {
+            return Err("max_whitelist must be 10-1000".into());
+        }
+        if !(10_000.0..=100_000_000.0).contains(&self.min_24h_volume_usd) {
+            return Err("min_24h_volume_usd must be 10000-100000000".into());
+        }
+        if self.retention_days < 0 {
+            return Err("retention_days must be >= 0 (0 = forever)".into());
+        }
+        Ok(())
+    }
+
+    pub fn snapshot_to_envs(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("MIN_PROFIT_THRESHOLD", format!("{}", self.min_profit_threshold)),
+            ("TAKER_FEE", format!("{}", self.taker_fee)),
+            ("SLIPPAGE_BUFFER", format!("{}", self.slippage_buffer)),
+            ("TARGET_VOLUME_USD", format!("{}", self.target_volume_usd)),
+            ("TICK_INTERVAL_MS", format!("{}", self.tick_interval_ms)),
+            ("REQUIRED_TICKS", format!("{}", self.required_ticks)),
+            ("MAX_WHITELIST", format!("{}", self.max_whitelist)),
+            ("MIN_VOLUME_24H", format!("{}", self.min_24h_volume_usd)),
+            ("RETENTION_DAYS", format!("{}", self.retention_days)),
+        ]
     }
 }
 
 // =============================================
-// NEW: API Keys (Secure storage - per guide)
+// Credential verification test results
 // =============================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyTestResult {
+    pub checked_at: DateTime<Utc>,
+    pub test_name: String,
+    pub passed: bool,
+    pub detail: String,
+}
+
+// =============================================
+// API Keys (encrypted at rest)
+// =============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeys {
     pub id: i64,
     pub api_key: String,
     pub secret_key: String,
     pub created_at: DateTime<Utc>,
-}
-
-impl ApiKeys {
-    pub fn new(api_key: String, secret_key: String) -> Self {
-        Self {
-            id: 1, // single row for simplicity
-            api_key,
-            secret_key,
-            created_at: Utc::now(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +313,3 @@ pub struct HealthResponse {
     pub uptime_ms: i64,
     pub telemetry: Telemetry,
 }
-
-// Re-export everything for clean usage
-pub use crate::data::models::PriceLevel; // already defined above

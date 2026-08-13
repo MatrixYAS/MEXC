@@ -1,170 +1,152 @@
 // frontend/src/components/VerifiedExecutions.tsx
-// Fixed: ops variable hoisted to outer scope so catch block can access it
+// v2: full filterable table of every verified trade the bot found, with all
+// dossier fields, a per-day stats strip, and a one-click CSV export.
 
-import { useState, useEffect } from 'react';
-import { api, TriangleOpportunity } from '../lib/api';
-import { format } from 'date-fns';
+import { useEffect, useState } from 'react';
+import { api, Opportunity } from '../lib/api';
 
 export default function VerifiedExecutions() {
-  const [opportunities, setOpportunities] = useState<TriangleOpportunity[]>([]);
-  const [todayStats, setTodayStats] = useState({
-    gaps_found: 0,
-    avg_yield: 0.0,
-    total_potential: 0.0,
-  });
+  const [rows, setRows] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({ gaps_found: 0, avg_yield_pct: 0, total_estimated_profit_usd: 0 });
+  const [minYield, setMinYield] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
-  const fetchData = async () => {
+  useEffect(() => {
+    load();
+  }, []);
+
+  const load = async () => {
     setLoading(true);
-    let ops: TriangleOpportunity[] = [];   // HOISTED to outer scope
-
     try {
-      ops = await api.recentOpportunities(100);
-      setOpportunities(ops);
-
-      const stats = await api.todayStats();
-      setTodayStats(stats);
-    } catch (error) {
-      console.error('Failed to fetch verified executions:', error);
-      
-      // Fallback using whatever ops we managed to get
-      setTodayStats({
-        gaps_found: ops.length,
-        avg_yield: ops.length > 0 
-          ? ops.reduce((sum, item) => sum + item.net_yield_percent, 0) / ops.length 
-          : 0,
-        total_potential: ops.reduce((sum, item) => sum + item.net_yield_percent, 0),
-      });
+      const [r, s] = await Promise.all([api.allOpportunities(), api.todayStats()]);
+      setRows(r);
+      setStats(s);
+    } catch (e: any) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-    
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const formatAge = (ms: number): string => {
-    if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
-    if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
-    return `${Math.floor(ms / 3600000)}h ago`;
-  };
-
-  const getFillScoreColor = (score: string) => {
-    switch (score) {
-      case 'A': return 'badge-A';
-      case 'B': return 'badge-B';
-      case 'C': return 'badge-C';
-      case 'D': return 'badge-D';
-      case 'F': return 'badge-F';
-      default: return 'badge-C';
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const blob = await api.exportCsv();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mexc_trades_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error('Export failed:', e);
+    } finally {
+      setExporting(false);
     }
   };
 
+  const filtered = rows.filter((r) => r.net_yield_percent * 100 >= minYield);
+
+  const fmtAge = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-3xl font-semibold tracking-tight">Verified Executions</h2>
-        <p className="text-[var(--secondary-text)] mt-1">
-          Real-world executable gaps • Headless logging from the Rust engine
-        </p>
+    <div className="space-y-6">
+      <div className="flex items-end justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="text-3xl font-semibold tracking-tight">Verified Executions</h2>
+          <p className="text-[var(--secondary-text)] mt-1">
+            Every opportunity the bot verified (3-tick persistence + weighted-fill simulation)
+          </p>
+        </div>
+        <button
+          onClick={handleExport}
+          disabled={exporting || rows.length === 0}
+          className="px-6 py-3 rounded-xl font-medium border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 transition"
+        >
+          {exporting ? 'Exporting…' : '⬇ Export CSV'}
+        </button>
       </div>
 
-      {/* Analytics Header */}
+      {/* Today's stats strip */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
-          <div className="text-sm text-[var(--secondary-text)]">Gaps Found Today</div>
-          <div className="text-4xl font-semibold mt-2 text-success">{todayStats.gaps_found}</div>
-        </div>
-        
-        <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
-          <div className="text-sm text-[var(--secondary-text)]">Average Yield</div>
-          <div className="text-4xl font-semibold mt-2 text-success">
-            +{todayStats.avg_yield.toFixed(2)}%
-          </div>
-        </div>
-        
-        <div className="surface rounded-2xl p-6 border border-[var(--accent-border)]">
-          <div className="text-sm text-[var(--secondary-text)]">Total Potential Yield</div>
-          <div className="text-4xl font-semibold mt-2 text-success">
-            +{todayStats.total_potential.toFixed(1)}%
-          </div>
-        </div>
+        <StatCard label="Gaps found today" value={String(stats.gaps_found)} />
+        <StatCard label="Avg net yield" value={`+${stats.avg_yield_pct.toFixed(3)}%`} />
+        <StatCard label="Total estimated profit" value={`$${stats.total_estimated_profit_usd.toFixed(2)}`} />
       </div>
 
-      {/* History Table */}
-      <div className="surface rounded-2xl overflow-hidden border border-[var(--accent-border)]">
-        <div className="px-6 py-4 border-b border-[var(--accent-border)] bg-[var(--surface)] flex justify-between items-center">
-          <h3 className="font-medium">Recent Verified Opportunities</h3>
-          <button 
-            onClick={fetchData}
-            className="text-xs px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
+      <div className="flex items-center gap-3">
+        <label className="text-sm text-[var(--secondary-text)]">Min net yield %:</label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={minYield}
+          onChange={(e) => setMinYield(parseFloat(e.target.value) || 0)}
+          className="w-28 px-3 py-2 rounded-lg border border-[var(--accent-border)] bg-transparent focus:outline-none focus:border-emerald-500 font-mono text-sm"
+        />
+      </div>
 
-        {loading && opportunities.length === 0 ? (
-          <div className="py-20 text-center text-[var(--secondary-text)]">
-            Loading verified gaps from SQLite...
-          </div>
-        ) : opportunities.length === 0 ? (
-          <div className="py-20 text-center text-[var(--secondary-text)]">
-            No verified opportunities yet.<br />
-            The engine is scanning for real-world executable triangles.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[var(--accent-border)]">
-                  <th className="px-6 py-4 text-left text-xs font-medium text-[var(--secondary-text)]">DETECTED</th>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-[var(--secondary-text)]">PATH</th>
-                  <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">NET YIELD</th>
-                  <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">CAPACITY</th>
-                  <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">AGE</th>
-                  <th className="px-6 py-4 text-center text-xs font-medium text-[var(--secondary-text)]">SCORE</th>
+      <div className="surface rounded-2xl overflow-x-auto border border-[var(--accent-border)]">
+        <table className="w-full text-sm min-w-[1100px]">
+          <thead>
+            <tr className="border-b border-[var(--accent-border)]">
+              <Th>TIME</Th><Th>PATH</Th><Th>NET %</Th><Th>GROSS %</Th><Th>FEES %</Th>
+              <Th>PROFIT $</Th><Th>CAPACITY $</Th><Th>TICKS</Th><Th>FILL</Th>
+              <Th>SLIP %</Th><Th>CONF %</Th><Th>AGE</Th><Th>STALE ms</Th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--accent-border)]">
+            {loading ? (
+              <tr><td colSpan={13} className="px-6 py-16 text-center text-[var(--secondary-text)]">Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={13} className="px-6 py-16 text-center text-[var(--secondary-text)]">
+                No verified trades yet. The table fills as the bot confirms real loops.
+              </td></tr>
+            ) : (
+              filtered.map((r) => (
+                <tr key={r.id} className="hover:bg-[rgba(16,185,129,0.05)]">
+                  <Td className="text-[var(--secondary-text)] font-mono">{new Date(r.detected_at).toLocaleTimeString()}</Td>
+                  <Td className="font-mono font-medium">{r.path}</Td>
+                  <Td className="font-semibold text-success">+{(r.net_yield_percent * 100).toFixed(3)}%</Td>
+                  <Td className="text-[var(--secondary-text)]">+{(r.gross_gap_percent * 100).toFixed(4)}%</Td>
+                  <Td className="text-[var(--secondary-text)]">{(r.fee_cost_percent * 100).toFixed(3)}%</Td>
+                  <Td className="font-medium text-success">${r.estimated_profit_usd.toFixed(2)}</Td>
+                  <Td>${r.capacity_usd.toFixed(0)}</Td>
+                  <Td>{r.ticks_survived}/3</Td>
+                  <Td><span className="badge-C">{r.fill_score}</span></Td>
+                  <Td>{(r.slippage_percent * 100).toFixed(4)}%</Td>
+                  <Td>{(r.confidence * 100).toFixed(0)}%</Td>
+                  <Td className="font-mono">{fmtAge(r.gap_age_ms)}</Td>
+                  <Td className="font-mono text-[var(--secondary-text)]">{r.staleness_ms}</Td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--accent-border)]">
-                {opportunities.map((opp) => (
-                  <tr key={opp.id} className="hover:bg-[rgba(16,185,129,0.05)]">
-                    <td className="px-6 py-5 text-sm text-[var(--secondary-text)] font-mono">
-                      {format(new Date(opp.detected_at), 'HH:mm:ss')}
-                    </td>
-                    <td className="px-6 py-5 font-mono text-sm">
-                      {opp.path}
-                    </td>
-                    <td className="px-6 py-5 text-right">
-                      <span className="text-lg font-semibold text-success">
-                        +{opp.net_yield_percent.toFixed(2)}%
-                      </span>
-                    </td>
-                    <td className="px-6 py-5 text-right font-medium">
-                      ${opp.capacity_usd.toFixed(0)}
-                    </td>
-                    <td className="px-6 py-5 text-right text-sm text-[var(--secondary-text)]">
-                      {formatAge(opp.gap_age_ms)}
-                    </td>
-                    <td className="px-6 py-5 text-center">
-                      <span className={`inline-block px-3 py-0.5 text-xs font-bold rounded-full ${getFillScoreColor(opp.fill_score)}`}>
-                        {opp.fill_score}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
 
-      <div className="text-xs text-center text-[var(--secondary-text)]">
-        All entries passed $1,000 weighted fill simulation + 3 consecutive ticks • Auto-pruned after 7 days
+      <div className="text-xs text-[var(--secondary-text)]">
+        {rows.length} total rows in database (retention setting controls auto-pruning).
+        Profit figures are estimates from weighted-fill simulation at the configured target volume.
       </div>
     </div>
   );
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="surface rounded-2xl border border-[var(--accent-border)] px-6 py-5">
+      <div className="text-xs uppercase tracking-wide text-[var(--secondary-text)]">{label}</div>
+      <div className="text-2xl font-semibold mt-1">{value}</div>
+    </div>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return <th className="px-4 py-3 text-left text-[11px] font-medium text-[var(--secondary-text)] uppercase tracking-wide">{children}</th>;
+}
+
+function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <td className={`px-4 py-3 ${className}`}>{children}</td>;
 }
