@@ -180,12 +180,13 @@ pub struct AppSetting {
 /// Canonical settings + defaults. Kept in sync with frontend Settings page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingsSnapshot {
-    pub min_profit_threshold: f64,   // e.g. 0.0025  (0.25% net after fees+buffer)
+    pub min_profit_threshold: f64,   // e.g. 0.001   (0.10% net after fees+buffer)
     pub taker_fee: f64,              // e.g. 0.0005  (0.05%)
     pub slippage_buffer: f64,        // e.g. 0.0005
     pub target_volume_usd: f64,      // discovery size, e.g. 1000
     pub tick_interval_ms: u64,       // e.g. 50
     pub required_ticks: u8,          // e.g. 3
+    pub precheck_gross_floor: f64,   // e.g. 0.001 (0.1%) fast gross-product floor
     pub max_whitelist: usize,        // e.g. 300
     pub min_24h_volume_usd: f64,     // e.g. 1_000_000
     pub retention_days: i32,         // e.g. 7, 0 = forever
@@ -196,12 +197,13 @@ pub struct SettingsSnapshot {
 impl Default for SettingsSnapshot {
     fn default() -> Self {
         Self {
-            min_profit_threshold: 0.0025,
+            min_profit_threshold: 0.001,
             taker_fee: 0.0005,
             slippage_buffer: 0.0005,
             target_volume_usd: 1000.0,
             tick_interval_ms: 50,
             required_ticks: 3,
+            precheck_gross_floor: 0.001,
             max_whitelist: 300,
             min_24h_volume_usd: 300_000.0,
             retention_days: 7,
@@ -219,6 +221,7 @@ impl SettingsSnapshot {
         "target_volume_usd",
         "tick_interval_ms",
         "required_ticks",
+        "precheck_gross_floor",
         "max_whitelist",
         "min_24h_volume_usd",
         "retention_days",
@@ -244,6 +247,9 @@ impl SettingsSnapshot {
         }
         if !(2..=10).contains(&self.required_ticks) {
             return Err("required_ticks must be 2-10".into());
+        }
+        if !(0.0..=0.02).contains(&self.precheck_gross_floor) {
+            return Err("precheck_gross_floor must be 0-0.02 (0-2%)".into());
         }
         if !(10..=1000).contains(&self.max_whitelist) {
             return Err("max_whitelist must be 10-1000".into());

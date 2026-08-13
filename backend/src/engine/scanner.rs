@@ -166,9 +166,12 @@ impl Scanner {
             if b1.is_stale(2000) || b2.is_stale(2000) || b3.is_stale(2000) {
                 continue;
             }
-            if top_of_book_precheck(&b1, &b2, &b3).is_none() {
+            let floor = self.settings.as_ref()
+                .map(|s| futures::executor::block_on(s.read()).precheck_gross_floor)
+                .unwrap_or(0.001);
+            if top_of_book_precheck(&b1, &b2, &b3, floor).is_none() {
                 // Still track the best live gap for visibility even if it
-                // doesn't clear the 0.5% precheck floor.
+                // doesn't clear the precheck gross floor.
                 if let Some(gross) = gross_gap(&b1, &b2, &b3) {
                     match sampled_gap {
                         None => sampled_gap = Some((gross, topo.pair2.clone())),
@@ -286,9 +289,9 @@ fn gross_gap(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -
     Some(best_bid3.price / (best_ask1.price * best_ask2.price))
 }
 
-fn top_of_book_precheck(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels) -> Option<()> {
+fn top_of_book_precheck(b1: &OrderBookLevels, b2: &OrderBookLevels, b3: &OrderBookLevels, gross_floor: f64) -> Option<()> {
     let gross = gross_gap(b1, b2, b3)?;
-    if gross <= 1.005 {
+    if gross <= 1.0 + gross_floor {
         None
     } else {
         Some(())

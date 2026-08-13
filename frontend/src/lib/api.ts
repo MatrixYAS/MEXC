@@ -41,6 +41,7 @@ export interface SettingsSnapshot {
   target_volume_usd: number;
   tick_interval_ms: number;
   required_ticks: number;
+  precheck_gross_floor: number;
   max_whitelist: number;
   min_24h_volume_usd: number;
   retention_days: number;

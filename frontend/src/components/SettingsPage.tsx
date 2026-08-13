@@ -242,7 +242,7 @@ export default function SettingsPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <Field
             label="Minimum net profit (%)"
-            sub="after fees + slippage buffer; e.g. 0.25"
+            sub="after fees + slippage buffer; 0.10 = tradable, 0.25+ = only big moves"
             value={(settings.min_profit_threshold * 100).toFixed(2)}
             onChange={(v) => { const n = parseFloat(v); if (!isNaN(n)) update({ min_profit_threshold: n / 100 }); }}
           />
@@ -266,9 +266,15 @@ export default function SettingsPage() {
           />
           <Field
             label="Required consecutive ticks"
-            sub="ghost filter: 2–10"
+            sub="gap must hold this many 50ms checks; ~3 = covers 3 order fills"
             value={String(settings.required_ticks)}
             onChange={(v) => { const n = parseInt(v); if (!isNaN(n)) update({ required_ticks: n }); }}
+          />
+          <Field
+            label="Fast gross floor (%)"
+            sub="skip loops whose naive product is below this; 0.10 in calm markets, 0.25+ for strong gaps"
+            value={(settings.precheck_gross_floor * 100).toFixed(2)}
+            onChange={(v) => { const n = parseFloat(v); if (!isNaN(n)) update({ precheck_gross_floor: n / 100 }); }}
           />
           <Field
             label="Target volume USD (discover size)"
