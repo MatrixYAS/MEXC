@@ -143,6 +143,15 @@ impl Scanner {
         self.topology.len()
     }
 
+    /// Best gross gap observed in the current sample window: `(pct, path, age_ms)`.
+    pub fn best_live_gap(&self) -> Option<(f64, String, u64)> {
+        self.best_gap.as_ref().map(|(g, p, t)| (*g, p.clone(), t.elapsed().as_millis() as u64))
+    }
+
+    pub fn reset_best_gap(&mut self) {
+        self.best_gap = None;
+    }
+
     /// Single scan tick: re-derive value for every cached loop from live books.
     pub fn tick(&mut self) -> Vec<Opportunity> {
         let mut verified = Vec::new();

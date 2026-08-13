@@ -62,6 +62,8 @@ export interface TelemetryData {
   ws_latency_ms: number;
   math_loop_time_ms: number;
   active_triangles: number;
+  best_live_gap_pct?: number;
+  best_live_gap_path?: string;
   timestamp: string;
 }
 

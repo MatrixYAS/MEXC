@@ -25,8 +25,50 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use axum::body::Body;
+use axum::response::IntoResponse;
+
+const STATIC_ROOT: &str = "/home/ubuntu/MEXC/backend/frontend/dist";
+
+/// Custom static-file server for the React SPA: resolves the requested URI
+/// against the build output, strips query strings, rejects directory
+/// traversal, and falls back to index.html for SPA routes (e.g. /health).
+async fn serve_static_or_spa(uri: axum::http::Uri) -> (StatusCode, axum::response::Response) {
+    let mut rel = uri.path().to_string();
+    if rel.starts_with('/') {
+        rel.remove(0);
+    }
+    if rel.is_empty() {
+        rel = "index.html".to_string();
+    }
+    if rel.contains("..") || rel.starts_with('.') {
+        rel = "index.html".to_string();
+    }
+    let path = std::path::Path::new(STATIC_ROOT).join(&rel);
+    // Track whether we are serving the SPA fallback (no on-disk asset match) so
+    // we can force text/html instead of letting mime_guess guess octet-stream.
+    let (bytes, is_spa) = match tokio::fs::read(&path).await {
+        Ok(b) => (b, false),
+        Err(_) => match tokio::fs::read(format!("{}/index.html", STATIC_ROOT)).await {
+            Ok(b) => (b, true),
+            Err(_) => return (StatusCode::NOT_FOUND, (StatusCode::NOT_FOUND, "not found").into_response()),
+        },
+    };
+    let mime = if is_spa {
+        mime::TEXT_HTML_UTF_8
+    } else {
+        mime_guess::from_path(&path).first_or_octet_stream()
+    };
+    let resp = axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", mime.as_ref())
+        .header("cache-control", if rel.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" })
+        .body(Body::from(bytes))
+        .unwrap();
+    (StatusCode::OK, resp)
+}
 
 mod cron;
 mod data;
@@ -310,7 +352,7 @@ async fn main() -> Result<()> {
         .route("/api/book/:sym", get(book_debug_handler))
         .route("/api/live-books", get(live_books_handler))
         .route("/api/key-tests", get(key_tests_handler))
-        .fallback_service(ServeDir::new("frontend/dist"))
+        .fallback(get(serve_static_or_spa))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

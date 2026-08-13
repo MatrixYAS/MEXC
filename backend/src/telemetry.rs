@@ -47,7 +47,16 @@ impl TelemetryCollector {
             let mut sys = self.system.lock().await;
             sys.refresh_cpu_specifics(CpuRefreshKind::everything());
             sys.refresh_memory_specifics(MemoryRefreshKind::everything());
-            (sys.global_cpu_usage(), sys.used_memory() / 1024 / 1024)
+            // Per-process RSS instead of system-wide used memory so the
+            // dashboard shows the bot's true footprint (not the whole VPS).
+            let rss_kb = std::process::Command::new("sh")
+                .args(["-c", &format!("ps -o rss= -p {}", std::process::id())])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            (sys.global_cpu_usage(), rss_kb / 1024)
         };
 
         let active = {
@@ -56,12 +65,19 @@ impl TelemetryCollector {
         };
         let loop_ms = *self.last_math_loop_duration.lock().await;
 
+        let (best_live_gap_pct, best_live_gap_path) = match self.scanner.lock().await.best_live_gap() {
+            Some((g, p, _age)) => (Some((g - 1.0) * 100.0), Some(p)),
+            None => (None, None),
+        };
+
         Telemetry {
             cpu_usage,
             ram_usage_mb: ram_used as u64,
             ws_latency_ms: 0.0,
             math_loop_time_ms: loop_ms,
             active_triangles: active,
+            best_live_gap_pct,
+            best_live_gap_path,
             timestamp: chrono::Utc::now(),
         }
     }

@@ -42,3 +42,4 @@ Thumbs.db
 *.tmp
 .cache/
 /backend/static
+backend/frontend/

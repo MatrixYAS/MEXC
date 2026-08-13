@@ -319,6 +319,10 @@ pub struct Telemetry {
     pub ws_latency_ms: f64,
     pub math_loop_time_ms: f64,
     pub active_triangles: usize,
+    /// Best gross gap seen across all loops in the current sample window (pct).
+    pub best_live_gap_pct: Option<f64>,
+    /// Path of the best live gap, e.g. "USDT→NEAR→USDC→USD1".
+    pub best_live_gap_path: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 

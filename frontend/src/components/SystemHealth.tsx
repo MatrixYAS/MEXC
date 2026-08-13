@@ -96,6 +96,13 @@ export default function SystemHealth() {
     return { status: 'HEALTHY', color: 'text-emerald-500' };
   };
 
+  const gapColor = (gap?: number) => {
+    if (gap === undefined) return 'text-gray-500';
+    if (gap > 0.05) return 'text-emerald-500';
+    if (gap > 0) return 'text-amber-400';
+    return 'text-red-400';
+  };
+
   return (
     <div className="space-y-8">
       <div>
@@ -161,6 +168,23 @@ export default function SystemHealth() {
               </div>
             </div>
             <div className="text-4xl">🔍</div>
+          </div>
+        </div>
+
+        <div className="surface rounded-3xl p-8 border border-[var(--accent-border)]">
+          <div className="flex justify-between items-start mb-6">
+            <div className="w-full">
+              <div className="text-sm text-[var(--secondary-text)]">Best Live Gross Gap</div>
+              <div className={`text-5xl font-semibold mt-3 ${gapColor(telemetry?.best_live_gap_pct)}`}>
+                {telemetry?.best_live_gap_pct !== undefined
+                  ? `${telemetry.best_live_gap_pct >= 0 ? '+' : ''}${telemetry.best_live_gap_pct.toFixed(3)}%`
+                  : '--'}
+              </div>
+              <div className="text-xs text-[var(--secondary-text)] mt-2 truncate" title={telemetry?.best_live_gap_path || ''}>
+                {telemetry?.best_live_gap_path || 'no data yet'}
+              </div>
+            </div>
+            <div className="text-4xl">📡</div>
           </div>
         </div>
       </div>
