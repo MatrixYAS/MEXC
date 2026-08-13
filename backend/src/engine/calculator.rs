@@ -262,15 +262,45 @@ pub fn find_optimal_size(
     let fee = taker_fee();
     let buffer = slippage_buffer();
 
-    // rough max fillable USD on leg 1 (first pass, best levels only)
+    // --- TRUE CAPACITY (hard ceiling from real book depth): the largest USD
+    // size where ALL three legs can fill at least 95% of it. We binary-search
+    // between $100 and a depth-based upper bound.
     let leg1_base_cap = book1
         .asks
         .iter()
         .filter(|l| l.price > 0.0 && l.volume > 0.0)
-        .take(10)
         .map(|l| l.price * l.volume)
         .sum::<f64>();
-    let max_usd = leg1_base_cap.min(100_000.0).max(100.0);
+    let hi0 = (leg1_base_cap.min(1_000_000.0)).max(100.0);
+    let all_legs_fill = |usd: f64| -> bool {
+        let f1 = calculate_weighted_fill(&book1.asks, usd, true);
+        if f1.is_low_liquidity || f1.fill_price <= 0.0 {
+            return false;
+        }
+        let (amount_b, f2) = buy_b_with_a(&book2.asks, f1.filled_volume);
+        if amount_b <= 0.0 || f2.is_low_liquidity {
+            return false;
+        }
+        let f3 = calculate_weighted_fill(&book3.bids, amount_b, false);
+        if f3.is_low_liquidity || f3.fill_price <= 0.0 {
+            return false;
+        }
+        true
+    };
+    let mut lo = 100.0_f64;
+    let mut hi = hi0;
+    if !all_legs_fill(lo) {
+        return None; // even $100 doesn't fill — unusable books
+    }
+    for _ in 0..30 {
+        let mid = (lo + hi) / 2.0;
+        if all_legs_fill(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let capacity = lo.floor(); // true max fillable USD, 95% fill guaranteed
 
     let eval = |usd: f64| -> Option<(f64, f64)> {
         let f1 = calculate_weighted_fill(&book1.asks, usd, true);
@@ -290,23 +320,32 @@ pub fn find_optimal_size(
         Some((net, usd))
     };
 
-    // Yield curve at geometric size points up to max_usd.
+    // Yield curve at geometric size points from $100 up to capacity.
     let mut curve = Vec::new();
     for exp in [2.0, 2.302, 2.605, 2.908, 3.21, 3.51, 3.815] {
-        let size = 10_f64.powf(exp).min(max_usd);
+        let size = 10_f64.powf(exp).min(capacity);
         if let Some((net, _)) = eval(size) {
             curve.push(SizePoint { size_usd: size, net_yield: net });
         }
     }
 
-    // Optimal = largest curve size with net >= threshold (and at least $100).
+    // Optimal = largest size where net yield stays at/above threshold AND the
+    // size is within true book capacity. Profit = optimal size × net yield.
     let mut optimal: Option<(f64, f64)> = None;
     for p in curve.iter() {
-        if p.size_usd >= 100.0 && p.net_yield >= threshold {
+        if p.size_usd <= capacity + 0.5 && p.net_yield >= threshold {
             optimal = Some((p.size_usd, p.net_yield));
         }
     }
-    optimal.map(|(size, yield_at)| (size, yield_at, curve))
+    // If the entire curve undercuts the threshold, the smallest viable size
+    // still keeps the gap 'open' (reported honestly — tiny size cap).
+    let (optimal, yield_at) = optimal.unwrap_or_else(|| {
+        curve
+            .first()
+            .map(|p| (p.size_usd, p.net_yield))
+            .unwrap_or((0.0, 0.0))
+    });
+    Some((optimal, yield_at, curve))
 }
 
 pub fn validate_triangle_full(

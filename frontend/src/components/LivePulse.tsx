@@ -5,6 +5,7 @@
 // slippage, and per-leg entry/fill prices.
 
 import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useSSE } from '../hooks/useSSE';
 import { Opportunity } from '../lib/api';
 
@@ -103,13 +104,14 @@ export default function LivePulse() {
         <table className="w-full">
           <thead>
             <tr className="border-b border-[var(--accent-border)] bg-[var(--surface)]">
+              <th className="px-6 py-4 text-left text-xs font-medium text-[var(--secondary-text)]">TIME</th>
               <th className="px-6 py-4 text-left text-xs font-medium text-[var(--secondary-text)]">PATH</th>
               <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">NET YIELD</th>
-              <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">PROFIT / CAPACITY</th>
+              <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">PROFIT / OPTIMAL SIZE</th>
               <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">FEE COST</th>
               <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">TICKS</th>
               <th className="px-6 py-4 text-center text-xs font-medium text-[var(--secondary-text)]">FILL</th>
-              <th className="px-6 py-4 text-center text-xs font-medium text-[var(--secondary-text)]">CONF</th>
+              <th className="px-6 py-4 text-center text-xs font-medium text-[var(--secondary-text)]">WIN %</th>
               <th className="px-6 py-4 text-right text-xs font-medium text-[var(--secondary-text)]">AGE</th>
             </tr>
           </thead>
@@ -119,6 +121,7 @@ export default function LivePulse() {
                 <tr key={`${g.id}-${idx}`}
                   className={`gap-row hover:bg-[rgba(16,185,129,0.05)] cursor-pointer transition ${idx === 0 && isFresh ? 'bg-[rgba(16,185,129,0.12)]' : ''}`}
                   onClick={() => setExpanded(expanded === g.id ? null : g.id)}>
+                  <td className="px-6 py-5 text-sm text-[var(--secondary-text)] font-mono whitespace-nowrap">{g.detected_at ? new Date(g.detected_at).toLocaleTimeString() : ''}</td>
                   <td className="px-6 py-5 font-mono text-sm font-medium">
                     {g.path}
                     {g.maker_plan_yield_percent > 0 && (
@@ -134,7 +137,7 @@ export default function LivePulse() {
                   </td>
                   <td className="px-6 py-5 text-right text-sm">
                     <div className="font-semibold text-success">${g.estimated_profit_usd.toFixed(2)}</div>
-                    <div className="text-[var(--secondary-text)] text-xs">up to ${g.capacity_usd.toFixed(0)}</div>
+                    <div className="text-[var(--secondary-text)] text-xs">@ ${g.optimal_size_usd.toFixed(0)} optimal size</div>
                   </td>
                   <td className="px-6 py-5 text-right text-sm text-[var(--secondary-text)] font-mono">
                     {fmtNum(g.fee_cost_percent, 3)}%
@@ -145,7 +148,7 @@ export default function LivePulse() {
                       {g.fill_score}
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-center text-sm font-medium">
+                  <td className="px-6 py-5 text-center text-sm font-medium" title="WIN % = 60% book liquidity grade + 40% ticks the gap survived. Not a guarantee — the market can still move.">
                     {fmtNum(g.confidence, 0)}%
                   </td>
                   <td className="px-6 py-5 text-right text-sm text-[var(--secondary-text)] font-mono">
@@ -174,18 +177,27 @@ export default function LivePulse() {
                   <Detail label="Gross gap" value={`+${fmtNum(g.gross_gap_percent, 4)}%`} hint="Raw loop product vs 1.0 before any costs — includes the slippage you pay walking the book." />
                       <Detail label="Fee cost (3 legs)" value={`${fmtNum(g.fee_cost_percent, 3)}%`} hint="MEXC spot taker fee 0.05% per leg × 3 legs = 0.15%. Taker fee × 3 legs. Configurable in Settings." />
                   <Detail label="Net yield" value={`+${fmtNum(g.net_yield_percent)}%`} hint="Gross gap − fees − slippage buffer. This is the gap that actually survives costs." />
-                  <Detail label="Optimal size" value={`$${g.optimal_size_usd.toFixed(0)} @ +${fmtNum(g.optimal_net_yield_percent, 2)}%`} highlight hint="Largest size whose net yield stays at/above the threshold given real book depth. Trade at this size or less." />
-                  <Detail label="Est. profit" value={`$${g.estimated_profit_usd.toFixed(2)}`} hint="Optimal size × net yield at that size. Low profit at high yield = small size cap (depth), not a math error." />
-                  <Detail label="True capacity (min depth)" value={`$${g.capacity_usd.toFixed(0)}`} hint="USD fillable across the shallowest leg — the hard ceiling." />
+                  <Detail label="Optimal trade size" value={`$${g.optimal_size_usd.toFixed(0)} @ +${fmtNum(g.optimal_net_yield_percent, 2)}%`} highlight hint="The actual dollar size to trade: binary-searched so all 3 legs fill ≥95% at this size while net yield stays at/above the threshold. This IS the OPTIMAL SIZE in the table." />
+                  <Detail label="Est. profit" value={`$${g.estimated_profit_usd.toFixed(2)}`} hint="Optimal size × net yield at that exact size. Profit can never exceed (size × net%). If yield is high but profit low, the books can only fill a small trade — slippage would kill the gap at larger sizes." />
                   <Detail label="Slippage @ target size" value={`${fmtNum(g.slippage_percent, 4)}%`} hint="Average slippage of the 3 legs computed separately: each leg's weighted fill price vs its best price. Paid per leg, measured per leg, already inside the gross gap." />
                   <Detail label="Gap age at emission" value={formatAge(g.gap_age_ms)} hint="How long the gap was open and confirmed before emission." />
                   <Detail label="Data freshness" value={`${g.staleness_ms}ms`} hint="Age of the order-book snapshot used. >2s is rejected." />
-                  <Detail label="Confidence (CONF %)" value={`${fmtNum(g.confidence, 0)}%`} hint="Weighted mix: data freshness + weighted-fill grade + tick persistence." />
+                  <Detail label="WIN %" value={`${fmtNum(g.confidence, 0)}%`} hint="60% order-book liquidity grade + 40% consecutive ticks the gap survived. Deep books + a gap that holds = higher WIN %. It is NOT a promise the trade will win — the market can still move against you in the ms after emission." />
                   <Detail label="Ticks survived (TICKS)" value={`${g.ticks_survived}`} hint="Consecutive 100ms WebSocket updates the gap persisted on fresh books. Required = 3 (Settings). Every tick re-validates the live fill simulation — ghosts die here." />
                   <Detail label="Maker-plan floor" value={g.maker_plan_yield_percent > 0 ? `+${fmtNum(g.maker_plan_yield_percent, 3)}%` : 'n/a'} hint="What the gap would be with 0% maker (limit-order) fees — upside if you trade as maker." />
                   <Detail label="Fill score" value={g.fill_score} hint="Liquidity grade A–F of the top 5 depth levels averaged across the 3 legs." />
                 </div>
                 {/* Size / yield curve */}
+                <div className="mt-3 flex items-center gap-3">
+                  <Link
+                    to={`/opportunity/${g.id}`}
+                    className="px-4 py-1.5 text-xs font-semibold rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Open full detail page →
+                  </Link>
+                  <span className="text-[11px] text-[var(--secondary-text)]">Detected at {g.detected_at ? new Date(g.detected_at).toLocaleString() : '—'}</span>
+                </div>
                 <SizeCurveChart curveJson={g.size_curve_json} />
                 <div className="mt-4 pt-4 border-t border-[var(--accent-border)]">
                   <div className="text-[11px] uppercase tracking-wide text-[var(--secondary-text)] mb-2">Live prices — same WebSocket feed, polled every 1.5s</div>

@@ -98,71 +98,65 @@ impl WssWorker {
         });
         ws_stream.send(Message::Text(subscription.to_string())).await?;
 
-        // Seed each symbol with a full depth snapshot from REST so incremental
-        // deltas can be applied on top of a known-good book.
-        let mut books: HashMap<String, BookState> = HashMap::new();
         // Boot seeding uses the single shared RestClient (one global rate
         // bucket for the whole bot). All workers draw from the same bucket,
         // so boot bursts never exceed the MEXC limit.
-        for sym in &self.symbols {
-            match self.rest.get_order_book_snapshot(sym, 100).await {
-                Ok(value) => {
-                    let mut bids = HashMap::new();
-                    let mut asks = HashMap::new();
-                    if let Some(b) = value["bids"].as_array() {
-                        for level in b {
-                            if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
-                                if let (Ok(price), Ok(vol)) =
-                                    (p.parse::<f64>(), q.parse::<f64>())
-                                {
-                                    if vol > 0.0 {
-                                        bids.insert(p.to_string(), vol);
+        // CRITICAL: seeding is a LONG blocking job (many REST calls); the WS
+        // message loop MUST run immediately or MEXC's 100ms deltas are lost
+        // and books go stale. Seed in the background, push incremental deltas
+        // onto the books while seeding catches up, then replace them.
+        let symbols_clone = self.symbols.clone();
+        let rest_clone = Arc::clone(&self.rest);
+        let worker_id_clone = self.worker_id;
+        let (seed_tx, mut seed_rx) = tokio::sync::mpsc::channel::<(String, BookState)>(self.symbols.len() + 16);
+        tokio::spawn(async move {
+            for sym in &symbols_clone {
+                let mut bids = HashMap::new();
+                let mut asks = HashMap::new();
+                let mut ok = true;
+                match rest_clone.get_order_book_snapshot(sym, 100).await {
+                    Ok(value) => {
+                        if let Some(b) = value["bids"].as_array() {
+                            for level in b {
+                                if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
+                                    if let (Ok(_price), Ok(vol)) = (p.parse::<f64>(), q.parse::<f64>()) {
+                                        if vol > 0.0 { bids.insert(p.to_string(), vol); }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(a) = value["asks"].as_array() {
+                            for level in a {
+                                if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
+                                    if let (Ok(_price), Ok(vol)) = (p.parse::<f64>(), q.parse::<f64>()) {
+                                        if vol > 0.0 { asks.insert(p.to_string(), vol); }
                                     }
                                 }
                             }
                         }
                     }
-                    if let Some(a) = value["asks"].as_array() {
-                        for level in a {
-                            if let (Some(p), Some(q)) = (level[0].as_str(), level[1].as_str()) {
-                                if let (Ok(price), Ok(vol)) =
-                                    (p.parse::<f64>(), q.parse::<f64>())
-                                {
-                                    if vol > 0.0 {
-                                        asks.insert(p.to_string(), vol);
-                                    }
-                                }
-                            }
-                        }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Worker {} snapshot fetch failed for {} ({}); book starts from WS deltas",
+                            worker_id_clone, sym, e
+                        );
+                        ok = false;
                     }
-                    books.insert(
-                        sym.to_string(),
-                        BookState { bids, asks },
-                    );
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "Worker {} snapshot fetch failed for {} ({}); book starts empty",
-                        self.worker_id,
-                        sym,
-                        e
-                    );
-                    books.insert(sym.to_string(), BookState { bids: HashMap::new(), asks: HashMap::new() });
+                let _ = seed_tx.send((sym.to_string(), BookState { bids, asks })).await;
+                if !ok {
+                    let _ = seed_tx.send((sym.to_string(), BookState { bids: HashMap::new(), asks: HashMap::new() })).await;
                 }
             }
-        }
+            drop(seed_tx);
+        });
 
-                // Push the seeded snapshots into the math engine so scanning can start
-        // immediately even before the first WS delta arrives.
-        for (sym, book) in &books {
-            self.push_book(sym, book);
-        }
-        // Global book re-seeding is handled by one shared ReseedTask (see
-        // network::reseed::ReseedTask) — doing it per-worker in parallel
-        // hammered MEXC's IP rate limit (thousands of 429s) because each worker
-        // spawned its own REST client with its own rate-limit bucket.
-        // Process incoming messages
-        while let Some(msg) = ws_stream.next().await {
+        // Process incoming WS messages IMMEDIATELY (deltas land on top of an
+        // empty or snapshot-seeded book — deltas accumulate while seeding runs)
+        let mut seeded = 0usize;
+        let mut books: HashMap<String, BookState> = HashMap::new();
+        let ws_fut = async {
+            while let Some(msg) = ws_stream.next().await {
             match msg {
                 Ok(Message::Binary(bin)) => {
                     if let Err(e) = self.handle_binary(&bin, &mut books).await {
@@ -177,7 +171,7 @@ impl WssWorker {
                     let _ = ws_stream.send(Message::Pong(p)).await;
                 }
                 Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
-                Ok(Message::Close(_)) => {
+                        Ok(Message::Close(_)) => {
                     tracing::info!("Worker {} connection closed", self.worker_id);
                     break;
                 }
@@ -186,6 +180,32 @@ impl WssWorker {
                     break;
                 }
             }
+        }
+        };
+        // Run the WS loop and the seed channel concurrently: both must be
+        // drained so no deltas are lost and no snapshots are dropped.
+        // Seed channel uses its OWN map (ws_fut borrows `books` mutably, so
+        // the two futures cannot share it) — deltas and snapshots merge after.
+        let mut seeds: HashMap<String, BookState> = HashMap::new();
+        tokio::select! {
+            _ = ws_fut => {}
+            _ = async {
+                while let Some((sym, snapshot)) = seed_rx.recv().await {
+                    seeded += 1;
+                    seeds.insert(sym, snapshot);
+                }
+            } => {}
+        }
+        // Merge: snapshot wins over WS deltas only while the delta map is
+        // still empty for that symbol (deltas arriving after the snapshot are
+        // always the freshest truth — never overwritten).
+        for (sym, snapshot) in seeds {
+            let entry = books.entry(sym.clone()).or_insert_with(|| BookState { bids: HashMap::new(), asks: HashMap::new() });
+            if entry.bids.is_empty() && entry.asks.is_empty() {
+                entry.bids = snapshot.bids;
+                entry.asks = snapshot.asks;
+            }
+            self.push_book(&sym, entry);
         }
 
         Ok(())

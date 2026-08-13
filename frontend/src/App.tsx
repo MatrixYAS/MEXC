@@ -9,6 +9,7 @@ import VerifiedExecutions from './components/VerifiedExecutions';
 import MarketWhitelist from './components/MarketWhitelist';
 import SystemHealth from './components/SystemHealth';
 import SettingsPage from './components/SettingsPage';
+import OpportunityDetail from './components/OpportunityDetail';
 
 function App() {
   const [isDark, setIsDark] = useState(true);
@@ -152,6 +153,7 @@ function App() {
             <Route path="/whitelist" element={<MarketWhitelist />} />
             <Route path="/health" element={<SystemHealth />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/opportunity/:id" element={<OpportunityDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

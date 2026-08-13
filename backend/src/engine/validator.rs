@@ -148,7 +148,10 @@ impl TriangleValidator {
                 crate::engine::calculator::find_optimal_size(&book1, &book2, &book3, threshold)
                     .unwrap_or((0.0, 0.0, vec![]));
             let size_curve_json = serde_json::to_string(&curve).unwrap_or_else(|_| "[]".into());
-            let est_profit = if optimal_size > 0.0 { optimal_size * optimal_yield } else { fr.estimated_profit_usd };
+            // Coherent reporting: the number shown as capacity IS the optimal
+            // trade size, and profit = size × net yield at that size.
+            let opt = if optimal_size > 0.0 { optimal_size } else { 100.0 };
+            let est_profit = opt * optimal_yield;
 
             Some(Opportunity {
                 id: Uuid::new_v4(),
@@ -158,7 +161,7 @@ impl TriangleValidator {
                 gross_gap_percent: fr.gross_yield * 100.0,
                 fee_cost_percent: fr.fee_cost * 100.0,
                 estimated_profit_usd: est_profit,
-                capacity_usd: fr.capacity_usd,
+                capacity_usd: opt,
                 gap_age_ms,
                 ticks_survived: state.consecutive_ticks as i32,
                 fill_score,

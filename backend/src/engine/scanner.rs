@@ -217,13 +217,18 @@ impl Scanner {
                 }
                 opp.staleness_ms = youngest;
 
-                // Confidence: per-loop historical emission rate
-                let (checks, emissions) = *entry;
-                opp.confidence = if checks == 0 {
-                    0.5
-                } else {
-                    (emissions as f64 / checks as f64).min(1.0)
+                // Confidence (WIN %): honest, per-emission score —
+                // 60% order-book liquidity grade + 40% persistence (ticks the gap
+                // survived). High WIN % = deep books + gap held across ticks.
+                let grade_score = match opp.fill_score.as_str() {
+                    "A" => 1.0,
+                    "B" => 0.85,
+                    "C" => 0.7,
+                    "D" => 0.55,
+                    _ => 0.3, // F / unknown
                 };
+                let ticks_score = (opp.ticks_survived as f64 / 10.0).min(1.0);
+                opp.confidence = (grade_score * 0.6 + ticks_score * 0.4) * 100.0;
 
                 self.last_emit.insert(topo.id, Instant::now());
                 tracing::info!(
