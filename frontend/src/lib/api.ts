@@ -67,6 +67,18 @@ export interface TelemetryData {
   timestamp: string;
 }
 
+export interface CoinInfo {
+  coin: string;
+  pair: string;
+  vol24h: number;
+  depth_usd: number;
+  buy_slip_pct: number | null;
+  sell_slip_pct: number | null;
+  test_usd: number;
+  max_slip_pct: number;
+  tradeable: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   uptime_ms: number;
@@ -122,6 +134,7 @@ export const api = {
   health: async (): Promise<HealthResponse> => get('/api/health'),
   telemetry: async (): Promise<TelemetryData> => get('/api/telemetry'),
   whitelist: async (): Promise<string[]> => get('/api/whitelist'),
+  coins: async (): Promise<CoinInfo[]> => get('/api/coins'),
   todayStats: async (): Promise<{ gaps_found: number; avg_yield_pct: number; total_estimated_profit_usd: number }> => get('/api/today-stats'),
 
   // Admin endpoints

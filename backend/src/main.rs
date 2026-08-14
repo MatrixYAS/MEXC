@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use axum::body::Body;
@@ -337,6 +337,7 @@ async fn main() -> Result<()> {
         .route("/api/telemetry", get(telemetry_handler))
         .route("/api/live-pulse", get(live_pulse_sse_handler))
         .route("/api/whitelist", get(whitelist_handler))
+        .route("/api/coins", get(coins_handler))
         .route("/api/login", post(login_handler))
         // admin
         .route("/api/recent-opportunities", get(recent_opportunities_handler))
@@ -809,6 +810,143 @@ async fn today_stats_handler(State(state): State<AppState>) -> Json<serde_json::
             Json(serde_json::json!({ "gaps_found": 0, "avg_yield_pct": 0.0, "total_estimated_profit_usd": 0.0 }))
         }
     }
+}
+
+
+/// Live coins the scanner is currently using, with measured tradability.
+/// Criterion: a $test_usd taker order must fill BOTH directions on the top 20
+/// depth levels with slippage <= max_slip. Volume is a proxy; depth is the truth.
+async fn coins_handler(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    let pool = state.ws_pool.lock().await;
+    let symbols = pool.current_symbols().to_vec();
+    drop(pool);
+
+    // derive coin -> deepest stable pair from current symbols
+    let stables = ["USDT", "USDC", "DAI", "FDUSD", "TUSD"];
+    let mut coin_pair: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for s in &symbols {
+        for st in &stables {
+            if let Some(coin) = s.strip_suffix(st) {
+                if coin.is_empty() || stables.contains(&coin) || !coin.chars().all(|c| c.is_alphanumeric()) { continue; }
+                coin_pair.entry(coin.to_string()).or_insert_with(|| s.clone());
+                break;
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    // fetch depth directly from MEXC public API (no key needed); cap concurrency
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(8)).build().unwrap_or_default();
+    let mut handles = Vec::new();
+    for (coin, pair) in coin_pair {
+        let sem = sem.clone();
+        let client = client.clone();
+        handles.push(tokio::spawn(async move {
+            let _p = sem.acquire().await;
+            let url = format!("https://api.mexc.com/api/v3/depth?symbol={}&limit=50", pair);
+            let j = match client.get(&url).send().await {
+                Ok(resp) => match resp.json::<serde_json::Value>().await {
+                    Ok(v) => v,
+                    Err(_) => return (coin, pair, serde_json::Value::Null),
+                },
+                Err(_) => return (coin, pair, serde_json::Value::Null),
+            };
+            let mut bids: Vec<(f64, f64)> = Vec::new();
+            let mut asks: Vec<(f64, f64)> = Vec::new();
+            if let Some(b) = j.get("bids").and_then(|x| x.as_array()) {
+                for l in b {
+                    if let (Some(p), Some(q)) = (l.get(0).and_then(|v| v.as_f64()), l.get(1).and_then(|v| v.as_f64())) {
+                        if p > 0.0 && q > 0.0 { bids.push((p, q)); }
+                    }
+                }
+            }
+            if let Some(a) = j.get("asks").and_then(|x| x.as_array()) {
+                for l in a {
+                    if let (Some(p), Some(q)) = (l.get(0).and_then(|v| v.as_f64()), l.get(1).and_then(|v| v.as_f64())) {
+                        if p > 0.0 && q > 0.0 { asks.push((p, q)); }
+                    }
+                }
+            }
+            (coin, pair, serde_json::json!({ "bids": bids, "asks": asks }))
+        }));
+    }
+
+    let mut results: Vec<(String, String, serde_json::Value)> = Vec::new();
+    for h in handles {
+        if let Ok(r) = h.await { results.push(r); }
+    }
+
+    let test_usd = 100.0;   // default test order
+    let max_slip = 0.001;   // 0.1%
+    let top_n = 20;
+
+    for (coin, pair, j) in results {
+        let vol24h = j.get("vol24h").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let bids = match j.get("bids").and_then(|x| x.as_array()) {
+            Some(arr) => arr.iter().filter_map(|l| {
+                let p = l.get(0)?.as_f64()?; let q = l.get(1)?.as_f64()?;
+                if p > 0.0 && q > 0.0 { Some((p, q)) } else { None }
+            }).collect::<Vec<_>>(),
+            None => vec![],
+        };
+        let asks = match j.get("asks").and_then(|x| x.as_array()) {
+            Some(arr) => arr.iter().filter_map(|l| {
+                let p = l.get(0)?.as_f64()?; let q = l.get(1)?.as_f64()?;
+                if p > 0.0 && q > 0.0 { Some((p, q)) } else { None }
+            }).collect::<Vec<_>>(),
+            None => vec![],
+        };
+
+        let slip_for = |mut lvls: Vec<(f64, f64)>, side: &str| -> Option<(f64, f64)> {
+            lvls.sort_by(|a, b| match side {
+                "buy" => a.0.partial_cmp(&b.0).unwrap(),   // asks ascending
+                _ => b.0.partial_cmp(&a.0).unwrap(),       // bids descending
+            });
+            lvls.truncate(top_n);
+            let best = lvls.first()?.0;
+            let mut remaining: f64 = test_usd;
+            let mut spent = 0.0;
+            let mut received = 0.0;
+            for (price, volume) in lvls {
+                let take = remaining.min(if side == "buy" { price * volume } else { volume });
+                if take <= 0.0 { break; }
+                spent += take;
+                received += if side == "buy" { take / price } else { take * price };
+                remaining -= take;
+                if remaining <= 0.0 { break; }
+            }
+            if spent < test_usd * 0.95 { return None; }
+            let fill = if side == "buy" { spent / received } else { received / spent };
+            Some(((fill - best).abs() / best, spent))
+        };
+
+        let buy = slip_for(asks.clone(), "buy");
+        let sell = slip_for(bids.clone(), "sell");
+        let depth_usd = match (buy, sell) {
+            (Some((_, db)), Some((_, ds))) => db.min(ds),
+            _ => 0.0,
+        };
+        let tradeable = buy.is_some() && sell.is_some()
+            && buy.unwrap().0 <= max_slip && sell.unwrap().0 <= max_slip;
+        out.push(serde_json::json!({
+            "coin": coin,
+            "pair": pair,
+            "vol24h": vol24h,
+            "depth_usd": depth_usd,
+            "buy_slip_pct": buy.map(|(s, _)| s * 100.0),
+            "sell_slip_pct": sell.map(|(s, _)| s * 100.0),
+            "test_usd": test_usd,
+            "max_slip_pct": max_slip * 100.0,
+            "tradeable": tradeable,
+        }));
+    }
+    out.sort_by(|a, b| {
+        let da = a.get("depth_usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let db = b.get("depth_usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        db.partial_cmp(&da).unwrap()
+    });
+    Json(out)
 }
 
 async fn whitelist_handler(State(state): State<AppState>) -> Json<Vec<String>> {

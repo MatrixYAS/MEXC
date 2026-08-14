@@ -10,6 +10,7 @@ import MarketWhitelist from './components/MarketWhitelist';
 import SystemHealth from './components/SystemHealth';
 import SettingsPage from './components/SettingsPage';
 import OpportunityDetail from './components/OpportunityDetail';
+import CoinsPage from './components/CoinsPage';
 
 function App() {
   const [isDark, setIsDark] = useState(true);
@@ -130,6 +131,7 @@ function App() {
                 <NavLink to="/verified">Verified Executions</NavLink>
                 <NavLink to="/whitelist">Market Maintenance</NavLink>
                 <NavLink to="/health">System Health</NavLink>
+                <NavLink to="/coins">Coins</NavLink>
                 <NavLink to="/settings">Settings</NavLink>
               </div>
 
@@ -152,6 +154,7 @@ function App() {
             <Route path="/verified" element={<VerifiedExecutions />} />
             <Route path="/whitelist" element={<MarketWhitelist />} />
             <Route path="/health" element={<SystemHealth />} />
+            <Route path="/coins" element={<CoinsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/opportunity/:id" element={<OpportunityDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
