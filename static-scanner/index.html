@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MEXC Ghost Hunter — Arbitrage Scanner (Triangles &amp; Quadrangles)</title>
+<title>MEXC Ghost Hunter — Quad/Penta/Hexagon Arbitrage Command Center</title>
 <style>
 :root {
-  --background: #0a0f0d;
-  --surface: #101614;
-  --surface-2: #161e1b;
+  --background: #070c0a;
+  --surface: #0e1411;
+  --surface-2: #141c19;
+  --surface-3: #1a2420;
   --accent-border: #1e2b26;
   --primary-text: #e8f0ec;
   --secondary-text: #7d9188;
@@ -18,85 +19,110 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--background); color: var(--primary-text); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; min-height: 100vh; }
-.wrap { max-width: 1280px; margin: 0 auto; padding: 28px 24px; }
-header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
-h1 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+.wrap { max-width: 1360px; margin: 0 auto; padding: 24px 22px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
+h1 { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em; }
 h1 span { color: var(--success); }
-header p { color: var(--secondary-text); font-size: 0.85rem; margin-top: 4px; max-width: 760px; }
+header p { color: var(--secondary-text); font-size: 0.82rem; margin-top: 4px; max-width: 820px; line-height: 1.5; }
 .status-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.badge { padding: 6px 14px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; border: 1px solid; white-space: nowrap; }
+.badge { padding: 6px 13px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; border: 1px solid; white-space: nowrap; }
 .badge.live { border-color: var(--success); color: var(--success); }
 .badge.off { border-color: var(--danger); color: var(--danger); }
 .badge.pending { border-color: var(--warning); color: var(--warning); }
-.badge.warn { border-color: var(--warning); color: var(--warning); }
-.stat { color: var(--secondary-text); font-size: 0.82rem; }
+.stat { color: var(--secondary-text); font-size: 0.8rem; }
 .stat b { color: var(--primary-text); font-weight: 600; }
-.tab-row { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--accent-border); }
-.tab { padding: 10px 18px; font-size: 0.85rem; color: var(--secondary-text); cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600; }
+.tab-row { display: flex; gap: 3px; margin-bottom: 14px; border-bottom: 1px solid var(--accent-border); }
+.tab { padding: 9px 16px; font-size: 0.82rem; color: var(--secondary-text); cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600; }
 .tab.active { color: var(--primary-text); border-color: var(--success); }
 .tab:hover { color: var(--primary-text); }
 .panel { display: none; }
 .panel.active { display: block; }
-.surface { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 16px; overflow: hidden; }
+.surface { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 14px; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; padding: 14px 16px; font-size: 0.72rem; font-weight: 600; color: var(--secondary-text); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--accent-border); }
+th { text-align: left; padding: 12px 14px; font-size: 0.7rem; font-weight: 600; color: var(--secondary-text); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--accent-border); }
 th.r, td.r { text-align: right; }
 th.c, td.c { text-align: center; }
-td { padding: 16px 16px; font-size: 0.9rem; border-bottom: 1px solid var(--accent-border); vertical-align: middle; }
+td { padding: 13px 14px; font-size: 0.88rem; border-bottom: 1px solid var(--accent-border); vertical-align: middle; }
 tr:last-child td { border-bottom: none; }
 tr.gap-row { cursor: pointer; }
 tr.gap-row:hover td { background: rgba(16,185,129,0.06); }
-td.mono { font-family: ui-monospace, monospace; font-size: 0.85rem; }
-td .sub { font-size: 0.72rem; color: var(--secondary-text); margin-top: 2px; font-family: ui-sans-serif, system-ui; }
+td.mono { font-family: ui-monospace, monospace; font-size: 0.83rem; }
+td .sub { font-size: 0.7rem; color: var(--secondary-text); margin-top: 2px; }
 .txt-green { color: var(--success); font-weight: 700; }
 .fresh-row td { background: rgba(16,185,129,0.12); }
 .dot-live { color: var(--success); margin-left: 4px; }
-.empty { text-align: center; padding: 56px 24px; color: var(--secondary-text); }
-.expanded { background: var(--surface); border-top: 1px solid var(--accent-border); }
-.expanded-inner { padding: 20px 24px 26px; }
-.grid-4 { display: grid; grid-cols: 1fr 1fr 1fr 1fr; gap: 16px; }
-@media (max-width: 900px) { .grid-4 { grid-cols: 1fr 1fr; } }
-@media (max-width: 560px) { .grid-4 { grid-cols: 1fr; } }
-.kv { font-size: 0.82rem; }
-.kv .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
+.empty { text-align: center; padding: 50px 22px; color: var(--secondary-text); }
+.grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14px; }
+@media (max-width: 960px) { .grid-4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .grid-4 { grid-template-columns: 1fr; } }
+.kv { font-size: 0.8rem; }
+.kv .k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
 .kv .v { font-weight: 600; margin-top: 2px; }
-.kv .h { font-size: 0.66rem; color: var(--secondary-text); opacity: 0.65; margin-top: 2px; }
+.kv .h { font-size: 0.64rem; color: var(--secondary-text); opacity: 0.65; margin-top: 2px; }
 .kv.hl .v { color: var(--success); }
-.leg-box { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 12px; padding: 12px 14px; font-size: 0.8rem; }
-.leg-box .lt { font-size: 0.66rem; text-transform: uppercase; color: var(--secondary-text); letter-spacing: 0.06em; }
-.leg-box .lp { font-family: ui-monospace, monospace; margin-top: 6px; line-height: 1.7; }
-.chart { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--accent-border); }
-.chart .ct { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); margin-bottom: 8px; }
-.chart-row { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
-.chart-bar { flex: 1; border-radius: 4px 4px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
-.chart-bar .bv { font-size: 0.6rem; color: var(--secondary-text); margin-bottom: 2px; white-space: nowrap; }
-.chart-bar .bl { font-size: 0.6rem; color: var(--secondary-text); margin-top: 2px; }
-.btn { padding: 8px 18px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; cursor: pointer; border: 1px solid var(--accent-border); background: var(--surface-2); color: var(--primary-text); }
+.leg-box { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 11px; padding: 11px 13px; font-size: 0.78rem; }
+.leg-box .lt { font-size: 0.64rem; text-transform: uppercase; color: var(--secondary-text); letter-spacing: 0.06em; }
+.leg-box .lp { font-family: ui-monospace, monospace; margin-top: 5px; line-height: 1.7; }
+.chart { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--accent-border); }
+.chart .ct { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); margin-bottom: 7px; }
+.chart-row { display: flex; align-items: flex-end; gap: 3px; height: 86px; }
+.chart-bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.chart-bar .bv { font-size: 0.58rem; color: var(--secondary-text); margin-bottom: 1px; white-space: nowrap; }
+.chart-bar .bl { font-size: 0.58rem; color: var(--secondary-text); margin-top: 1px; }
+.btn { padding: 7px 16px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; cursor: pointer; border: 1px solid var(--accent-border); background: var(--surface-2); color: var(--primary-text); }
 .btn:hover { border-color: var(--success); }
 .btn.primary { background: var(--success); color: #031b13; border-color: var(--success); }
-.form-row { display: flex; flex-wrap: wrap; gap: 14px; margin: 18px 0; align-items: flex-end; }
-.field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
-.field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
-.field input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; padding: 9px 12px; color: var(--primary-text); font-size: 0.9rem; font-family: ui-monospace, monospace; width: 100%; }
+.btn:disabled { opacity: 0.5; cursor: wait; }
+.form-row { display: flex; flex-wrap: wrap; gap: 13px; margin: 16px 0; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 145px; }
+.field label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
+.field input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 9px; padding: 8px 11px; color: var(--primary-text); font-size: 0.88rem; font-family: ui-monospace, monospace; width: 100%; }
 .field input:focus { outline: none; border-color: var(--success); }
-.field .fh { font-size: 0.66rem; color: var(--secondary-text); opacity: 0.7; }
-.note { color: var(--secondary-text); font-size: 0.78rem; line-height: 1.7; margin-top: 12px; max-width: 860px; }
-.footer { margin-top: 26px; text-align: center; font-size: 0.72rem; color: var(--secondary-text); }
-table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
+.field .fh { font-size: 0.64rem; color: var(--secondary-text); opacity: 0.7; }
+.note { color: var(--secondary-text); font-size: 0.76rem; line-height: 1.65; margin-top: 10px; max-width: 900px; }
+.footer { margin-top: 22px; text-align: center; font-size: 0.7rem; color: var(--secondary-text); }
+table.history td { font-family: ui-monospace, monospace; font-size: 0.76rem; }
+.shape-badge { font-size: 0.62rem; border: 1px solid; border-radius: 6px; padding: 1px 6px; margin-right: 6px; font-weight: 700; }
+.badge-stb2 { color: #60a5fa; border-color: #60a5fa; }
+.badge-quad { color: var(--warning); border-color: var(--warning); }
+.badge-penta { color: #c084fc; border-color: #c084fc; }
+.badge-hex { color: #fb7185; border-color: #fb7185; }
 /* password gate */
-#gate { position: fixed; inset: 0; background: rgba(6,10,8,0.96); z-index: 50; display: flex; align-items: center; justify-content: center; }
+#gate { position: fixed; inset: 0; background: rgba(4,8,6,0.97); z-index: 50; display: flex; align-items: center; justify-content: center; }
 #gate.hidden { display: none; }
-#gate .card { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 18px; padding: 32px; width: 340px; text-align: center; }
-#gate input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; padding: 11px 14px; color: var(--primary-text); font-size: 0.95rem; width: 100%; margin: 14px 0; font-family: ui-monospace, monospace; }
-#gate .err { color: var(--danger); font-size: 0.8rem; margin-top: 8px; display: none; }
+#gate .card { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 16px; padding: 30px; width: 330px; text-align: center; }
+#gate input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; padding: 10px 13px; color: var(--primary-text); font-size: 0.93rem; width: 100%; margin: 13px 0; font-family: ui-monospace, monospace; }
+#gate .err { color: var(--danger); font-size: 0.78rem; margin-top: 7px; display: none; }
+
+/* ===== dossier page ===== */
+#dossier { display: none; position: fixed; inset: 0; background: var(--background); z-index: 40; overflow-y: auto; }
+#dossier.active { display: block; }
+.doss { max-width: 1180px; margin: 0 auto; padding: 20px 22px 40px; }
+.doss-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 16px; }
+.doss-path { font-family: ui-monospace, monospace; font-size: 1.15rem; font-weight: 700; line-height: 1.5; }
+.doss-meta { font-size: 0.72rem; color: var(--secondary-text); line-height: 1.7; }
+.section { margin-bottom: 18px; }
+.section .sh { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--secondary-text); margin-bottom: 8px; font-weight: 600; }
+.price-chart { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 12px; padding: 12px 14px; }
+.price-chart .pc-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.price-chart .pc-title .sym { font-family: ui-monospace, monospace; font-weight: 700; font-size: 0.82rem; }
+.price-chart .pc-title .price { font-family: ui-monospace, monospace; font-size: 0.82rem; }
+.price-chart .pc-title .price.up { color: var(--success); }
+.price-chart .pc-title .price.down { color: var(--danger); }
+.price-chart .pc-sub { font-size: 0.64rem; color: var(--secondary-text); margin-bottom: 4px; }
+.price-chart canvas { width: 100%; height: 150px; display: block; }
+.price-chart .pc-mark { font-size: 0.62rem; color: var(--warning); margin-top: 3px; }
+.test-line { margin: 14px 0; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; font-size: 0.74rem; color: var(--secondary-text); font-family: ui-monospace, monospace; white-space: nowrap; overflow: auto; }
+.test-line .ok { color: var(--success); font-weight: 700; }
+.test-line .fail { color: var(--danger); font-weight: 700; }
 </style>
 </head>
 <body>
 
 <div id="gate">
   <div class="card">
-    <h1 style="font-size:1.25rem">MEXC Ghost Hunter</h1>
-    <p style="color:var(--secondary-text);font-size:0.82rem;margin-top:8px">Private scanner. Enter access password.</p>
+    <h1 style="font-size:1.2rem">MEXC Ghost Hunter</h1>
+    <p style="color:var(--secondary-text);font-size:0.8rem;margin-top:8px">Arbitrage command center.<br>Quad / Penta / Hexagon scanner + stable cross-rate pairs.</p>
     <input id="gateInput" type="password" placeholder="password" autofocus>
     <button class="btn primary" id="gateBtn">Enter</button>
     <div class="err" id="gateErr">Wrong password.</div>
@@ -106,8 +132,8 @@ table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
 <div class="wrap">
   <header>
     <div>
-      <h1>MEXC <span>Ghost Hunter</span></h1>
-      <p>Triangular &amp; quadrangular arbitrage scanner — stable → A → B [→ C] → stable loops over USDT · USDC · DAI · FDUSD · TUSD. Live MEXC order books (WebSocket 100ms + REST re-seed). Truthful costs: 0.05% taker × N legs + measured slippage. Nothing trades — scanning and simulation only.</p>
+      <h1>MEXC <span>Ghost Hunter</span> — Command Center</h1>
+      <p>Stable → A → B → C [→ D → E] → stable loops across USDT · USDC · DAI · FDUSD · TUSD. Plus direct stable↔stable cross-rate gaps. Live MEXC order books (WebSocket 100ms + REST re-seed). Truthful costs: 0.05% taker × N legs + measured weighted-fill slippage. Optimal trade size binary-searched from real depth. Nothing trades — scanning and simulation only.</p>
     </div>
     <div class="status-row">
       <div id="stConn" class="badge off">● DISCONNECTED</div>
@@ -119,12 +145,11 @@ table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
     </div>
   </header>
 
-  <div class="tab-row">
+  <div class="tab-row" id="mainTabs">
     <div class="tab active" data-tab="live">Live Pulse</div>
-    <div class="tab" data-tab="history">History <span id="histCount"></span></div>
+    <div class="tab" data-tab="trades">Trades <span id="histCount"></span></div>
     <div class="tab" data-tab="coins">Coins <span id="coinsCount"></span></div>
-    <div class="tab" data-tab="settings">Settings &amp; Universe</div>
-    <div class="tab" id="tab-btn-dossier" data-tab="dossier" style="display:none">Trade Dossier</div>
+    <div class="tab" data-tab="settings">Settings &amp; Tests</div>
   </div>
 
   <div class="panel active" id="panel-live">
@@ -132,51 +157,49 @@ table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
       <table>
         <thead>
           <tr>
-            <th>Time</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit / optimal size</th>
-            <th class="r">Fee cost</th><th class="c">Ticks</th><th class="c">Fill</th><th class="c">Conf %</th><th class="r">Age</th>
+            <th>Time</th><th>Shape</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit / size</th>
+            <th class="r">Fees</th><th class="r">Slip</th><th class="c">Conf</th><th class="c">Fill</th><th class="r">Age</th>
           </tr>
         </thead>
         <tbody id="liveRows">
-          <tr><td colspan="9" class="empty">Connecting to MEXC and seeding order books…<br>Finding verified gaps takes a few minutes of watching the market.</td></tr>
+          <tr><td colspan="10" class="empty">Connecting to MEXC and seeding order books…<br>Verified gaps appear here as the market is watched tick by tick.</td></tr>
         </tbody>
       </table>
     </div>
-    <div class="footer">
-      Click any row for the full trade dossier • Fees: 0.05% taker × N legs per loop (configurable) • Verified = weighted-fill simulation passed + tick persistence + 1s staleness gate
-    </div>
+    <div class="footer">Click any row for the full trade dossier. Fees: 0.05% taker × N legs (4 legs quad = 0.20%, 5 pent = 0.25%, 6 hex = 0.30%). Verified = weighted-fill simulation passed on every leg + required tick persistence + 1s staleness gate.</div>
   </div>
 
   <div class="panel" id="panel-coins">
     <div class="surface">
-      <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="padding:13px 15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <span class="stat" id="coinsInfo">Measuring live tradability…</span>
         <span class="stat" id="coinsCrit"></span>
       </div>
       <table class="history">
         <thead>
           <tr>
-            <th>#</th><th>Coin</th><th>Pair</th><th class="r">24h volume</th><th class="r">Depth (top 20)</th>
-            <th class="r">Buy $100 slip</th><th class="r">Sell $100 slip</th><th class="c">Tradeable</th>
+            <th>#</th><th>Coin</th><th>Pair</th><th class="r">24h volume</th><th class="r">Depth</th>
+            <th class="r">Buy slip</th><th class="r">Sell slip</th><th class="c">Tradeable</th>
           </tr>
         </thead>
         <tbody id="coinsRows"></tbody>
       </table>
     </div>
-    <div class="footer">Every coin the scanner is using right now, measured live from the MEXC order book. “Tradeable” = a $100 taker order fills in both directions with slippage at or below your maximum — this is how the universe is selected, not 24h volume alone.</div>
+    <div class="footer">Every coin the scanner is using right now, measured live from the MEXC order book. “Tradeable” = a test-order fills in both directions with slippage at or below your maximum — depth is the truth, 24h volume is only the proxy.</div>
   </div>
 
-  <div class="panel" id="panel-history">
+  <div class="panel" id="panel-trades">
     <div class="surface">
-      <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <span class="stat" id="histInfo">0 opportunities saved (browser session)</span>
+      <div style="padding:13px 15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="stat" id="histInfo">0 opportunities saved (browser storage)</span>
         <button class="btn primary" id="btnExport">Export CSV</button>
         <button class="btn" id="btnClearHist">Clear</button>
       </div>
       <table class="history">
         <thead>
           <tr>
-            <th>Detected at</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit</th>
-            <th class="r">Optimal size</th><th class="c">Ticks</th><th class="c">Conf %</th><th class="r">Uptime</th><th class="r">Realized</th>
+            <th>Detected at</th><th>Shape</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit</th>
+            <th class="r">Optimal size</th><th class="c">Ticks</th><th class="c">Conf</th>
           </tr>
         </thead>
         <tbody id="histRows"></tbody>
@@ -184,17 +207,18 @@ table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
     </div>
   </div>
 
-  <div class="panel" id="panel-dossier">
-    <div class="surface" id="dossierBody"><div style="padding:40px;text-align:center;color:var(--secondary-text)">Select a trade from History to view its full dossier.</div></div>
-  </div>
-
   <div class="panel" id="panel-settings">
-    <div class="surface" style="padding:20px 24px">
+    <div class="surface" style="padding:18px 22px">
       <div class="form-row">
         <div class="field">
           <label>Min net yield %</label>
           <input id="cfgThreshold" type="number" step="0.0001" min="0">
           <div class="fh">Minimum net gap after fees &amp; slippage</div>
+        </div>
+        <div class="field">
+          <label>Gross precheck %</label>
+          <input id="cfgPrecheck" type="number" step="0.0001" min="0">
+          <div class="fh">Fast top-of-book gross floor to skip the rest</div>
         </div>
         <div class="field">
           <label>Taker fee % per leg</label>
@@ -204,60 +228,89 @@ table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
         <div class="field">
           <label>Slippage buffer %</label>
           <input id="cfgSlip" type="number" step="0.001" min="0">
-          <div class="fh">Extra safety margin per loop</div>
+          <div class="fh">Extra safety margin per loop on top of measured slip</div>
         </div>
         <div class="field">
           <label>Reference size $</label>
-          <input id="cfgSize" type="number" step="50" min="100">
-          <div class="fh">Dollar size used to measure fills (optimal size is searched around it)</div>
+          <input id="cfgSize" type="number" step="50" min="50">
+          <div class="fh">Size the weighted-fill simulation is computed at (optimal size searched around it)</div>
         </div>
         <div class="field">
           <label>Required ticks</label>
-          <input id="cfgTicks" type="number" step="1" min="1" max="10">
+          <input id="cfgTicks" type="number" step="1" min="1" max="20">
           <div class="fh">Consecutive 100ms updates the gap must survive</div>
         </div>
         <div class="field">
-          <label>Tradability test size $</label>
+          <label>Tradability test $</label>
           <input id="cfgTestUsd" type="number" step="10" min="10">
-          <div class="fh">The coin must fill this order in both directions to be used (default 100)</div>
+          <div class="fh">Coin must fill this order both ways to be used (default 100)</div>
         </div>
         <div class="field">
-          <label>Max slippage % for test</label>
+          <label>Max test slippage %</label>
           <input id="cfgMaxSlip" type="number" step="0.01" min="0">
           <div class="fh">Maximum slippage the test order may pay (default 0.1%)</div>
         </div>
         <div class="field">
-          <label>Loop shapes</label>
-          <div style="display:flex;gap:16px;align-items:center;margin-top:4px">
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" id="cfgTri" style="margin-right:6px">Triangles (3 pairs)</label>
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" id="cfgQuad" style="margin-right:6px">Quadrangles (4 pairs)</label>
-          </div>
-          <div class="fh">Quads add an extra intermediate coin: stable → A → B → C → stable</div>
+          <label>Whitelist volume floor $</label>
+          <input id="cfgMinVol" type="number" step="10000" min="0">
+          <div class="fh">24h quote volume floor for stable-pair entry (default 300,000)</div>
         </div>
         <div class="field">
+          <label>Max whitelist size</label>
+          <input id="cfgMaxWL" type="number" step="10" min="20" max="900">
+          <div class="fh">How many symbols the scanner watches (default 450)</div>
+        </div>
+        <div class="field">
+          <label>Emit cooldown ms</label>
+          <input id="cfgCooldown" type="number" step="500" min="500" max="60000">
+          <div class="fh">Minimum gap between two emissions of the same loop</div>
+        </div>
+        <div class="field">
+          <label>Loop shapes</label>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:4px">
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" id="cfgStb2" style="margin-right:5px">Stable2</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" id="cfgQuad" style="margin-right:5px">Quad (4 pairs)</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" id="cfgPenta" style="margin-right:5px">Penta (5 pairs)</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" id="cfgHex" style="margin-right:5px">Hex (6 pairs)</label>
+          </div>
+          <div class="fh">Stable2 = direct stable↔stable cross-rate gap (2 pairs). No triangles: 3 legs rarely survive fees truthfully.</div>
+        </div>
+        <div class="field" style="min-width:300px">
           <label>Stablecoin basket</label>
-          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:4px">
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="USDT" style="margin-right:4px">USDT</label>
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="USDC" style="margin-right:4px">USDC</label>
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="DAI" style="margin-right:4px">DAI</label>
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="FDUSD" style="margin-right:4px">FDUSD</label>
-            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="TUSD" style="margin-right:4px">TUSD</label>
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:4px">
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" class="cfgStable" value="USDT" style="margin-right:4px">USDT</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" class="cfgStable" value="USDC" style="margin-right:4px">USDC</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" class="cfgStable" value="DAI" style="margin-right:4px">DAI</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" class="cfgStable" value="FDUSD" style="margin-right:4px">FDUSD</label>
+            <label style="font-weight:normal;cursor:pointer;font-size:0.8rem"><input type="checkbox" class="cfgStable" value="TUSD" style="margin-right:4px">TUSD</label>
           </div>
           <div class="fh">Loops may start in any selected stable and end in any selected stable (e.g. USDT → A → B → USDC)</div>
         </div>
         <button class="btn primary" id="btnSaveCfg">Apply &amp; restart</button>
       </div>
+      <div class="section" style="margin-top:4px">
+        <div class="sh">Connection &amp; universe tests</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" id="btnTestConn">Test connection</button>
+          <button class="btn" id="btnMeasureUniverse">Measure coin universe</button>
+        </div>
+        <div class="test-line" id="testOut">Press “Test connection” to verify the MEXC endpoints from this browser…</div>
+      </div>
       <div class="note">
-        All settings are client-side: they are stored in this browser only and applied the moment you restart the scan.
-        The scanner connects to MEXC's public market-data endpoints — no API key is required.
-        Net yield = gross gap − (N × taker fee) − slippage buffer, where N is 3 legs (triangle) or 4 legs (quadrangle). Optimal trade size is binary-searched so every leg fills while net yield stays at or above your minimum.
-        Profit shown = optimal size × net yield at that exact size — small capacity + high yield is how the market pays out on thin books.
+        All settings are client-side: stored in this browser only, applied on restart. The scanner connects to MEXC's public market-data endpoints — no API key required. Net yield = gross gap − (N × taker fee) − slippage buffer, with N = 2, 4, 5 or 6 legs. Slippage is the weighted-fill average per leg walked through real depth, in quote-USD so both directions share one scale. Optimal size = largest size that still fills every leg with net yield ≥ your minimum, binary-searched from live books. The trade dossier shows every coin's live mid-price chart with the trade marked on it.
       </div>
     </div>
   </div>
 </div>
 
+<div id="dossier">
+  <div class="doss" id="dossBody"></div>
+</div>
+
 <script type="module">
+import "./pb.js";
+import "./engine.js";
+import "./scanner.js";
 import { Scanner } from "./scanner.js";
 import { DEFAULTS } from "./engine.js";
 
@@ -280,19 +333,20 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   document.getElementById("panel-" + t.dataset.tab).classList.add("active");
 });
 
-// config defaults
-const cfgIds = { cfgThreshold: "minProfitThreshold", cfgFee: "takerFee", cfgSlip: "slippageBuffer", cfgSize: "targetVolumeUsd", cfgTicks: "requiredTicks", cfgTestUsd: "liquidityTestUsd", cfgMaxSlip: "maxSlip" };
+// config
+const cfgIds = { cfgThreshold: "minProfitThreshold", cfgPrecheck: "precheckGrossFloor", cfgFee: "takerFee", cfgSlip: "slippageBuffer", cfgSize: "targetVolumeUsd", cfgTicks: "requiredTicks", cfgTestUsd: "liquidityTestUsd", cfgMaxSlip: "maxSlip", cfgMinVol: "minVol", cfgMaxWL: "maxWhitelist", cfgCooldown: "emitCooldownMs" };
 const STABLE_LIST = ["USDT", "USDC", "DAI", "FDUSD", "TUSD"];
-const fmt = { cfgThreshold: v => (v * 100).toFixed(4), cfgFee: v => (v * 100).toFixed(3), cfgSlip: v => (v * 100).toFixed(3), cfgSize: v => String(Math.round(v)), cfgTicks: v => String(Math.round(v)), cfgTestUsd: v => String(Math.round(v)), cfgMaxSlip: v => (v * 100).toFixed(3) };
+function fmtPct(v, d) { return (v * 100).toFixed(d); }
 function loadCfg() {
   try {
     const saved = JSON.parse(localStorage.getItem("gh_cfg") || "{}");
     const merged = { ...DEFAULTS, ...saved };
+    const pct = ["minProfitThreshold", "precheckGrossFloor", "takerFee", "slippageBuffer", "maxSlip"];
     for (const [id, key] of Object.entries(cfgIds)) {
-      document.getElementById(id).value = (key === "minProfitThreshold" || key === "takerFee" || key === "slippageBuffer") ? ((merged[key] || 0) * 100).toFixed(3) : fmt[id](merged[key]);
+      const v = merged[key];
+      document.getElementById(id).value = pct.includes(key) ? fmtPct(v, key === "minProfitThreshold" || key === "precheckGrossFloor" ? 4 : 3) : String(Math.round(v));
     }
-    document.getElementById("cfgTri").checked = (merged.shapes || DEFAULTS.shapes).includes("triangle");
-    document.getElementById("cfgQuad").checked = (merged.shapes || DEFAULTS.shapes).includes("quad");
+    for (const [id, shape] of [["cfgStb2", "stable2"], ["cfgQuad", "quad"], ["cfgPenta", "penta"], ["cfgHex", "hex"]]) document.getElementById(id).checked = (merged.shapes || DEFAULTS.shapes).includes(shape);
     for (const st of STABLE_LIST) {
       const cb = document.querySelector(`.cfgStable[value="${st}"]`);
       if (cb) cb.checked = (merged.stables || DEFAULTS.stables).includes(st);
@@ -303,11 +357,12 @@ function loadCfg() {
 let settings = loadCfg();
 document.getElementById("btnSaveCfg").onclick = () => {
   const raw = {};
+  const pct = ["minProfitThreshold", "precheckGrossFloor", "takerFee", "slippageBuffer", "maxSlip"];
   for (const [id, key] of Object.entries(cfgIds)) {
     const v = parseFloat(document.getElementById(id).value);
-    if (!isNaN(v)) raw[key] = key === "takerFee" || key === "minProfitThreshold" || key === "slippageBuffer" || key === "maxSlip" ? v / 100 : v;
+    if (!isNaN(v)) raw[key] = pct.includes(key) ? v / 100 : v;
   }
-  const shapes = [document.getElementById("cfgTri").checked ? "triangle" : null, document.getElementById("cfgQuad").checked ? "quad" : null].filter(Boolean);
+  const shapes = [["cfgStb2", "stable2"], ["cfgQuad", "quad"], ["cfgPenta", "penta"], ["cfgHex", "hex"]].filter(([id]) => document.getElementById(id).checked).map(([, s]) => s);
   const stables = [...document.querySelectorAll(".cfgStable:checked")].map(cb => cb.value);
   raw.shapes = shapes.length ? shapes : DEFAULTS.shapes;
   raw.stables = stables.length ? stables : DEFAULTS.stables;
@@ -322,160 +377,49 @@ let scanner = null;
 let freshId = null, freshAt = 0;
 
 const fmtPrice = p => p === 0 ? "—" : p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(6) : p.toFixed(8);
-const fmtMs = ms => ms < 1000 ? ms + "ms" : Math.floor(ms / 1000) + "s";
+const fmtMs = ms => ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s";
+const fmtUsd = v => "$" + Math.round(v).toLocaleString();
 const fillColor = s => ({ A: "#10b981", B: "#34d399", C: "#f59e0b", D: "#f97316", F: "#ef4444" }[s.charAt(0)] || "#7d9188");
+const shapeCls = s => ({ STB2: "badge-stb2", QUAD: "badge-quad", PENTA: "badge-penta", HEX: "badge-hex" }[s] || "badge-quad");
+
+function shapeBadgeHtml(g) {
+  return `<span class="shape-badge ${shapeCls(g.shape || "QUAD")}">${g.shape || "QUAD"}</span>`;
+}
 
 function renderLive() {
   const tbody = document.getElementById("liveRows");
   const rows = [...liveMap.values()].sort((a, b) => b.confidence - a.confidence || b.netYieldPercent - a.netYieldPercent).slice(0, 60);
-  if (rows.length === 0) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No verified gaps yet.<br>Loops (triangles &amp; quadrangles) must pass weighted-fill simulation across every leg and survive the required consecutive ticks.</td></tr>'; return; }
+  if (rows.length === 0) { tbody.innerHTML = '<tr><td colspan="10" class="empty">No verified gaps yet.<br>Quad, penta and hexagon loops must pass weighted-fill simulation across every leg and survive the required consecutive ticks.</td></tr>'; return; }
   const now = Date.now();
   tbody.innerHTML = rows.map(g => `
     <tr class="gap-row ${freshId === g.id && now - freshAt < 700 ? "fresh-row" : ""}" data-id="${g.id}">
       <td class="mono" style="color:var(--secondary-text)">${new Date(g.detectedAt).toLocaleTimeString()}</td>
-      <td class="mono">${g.shape ? `<span style="font-size:0.66rem;color:${g.shape === "QUAD" ? "var(--warning)" : "var(--secondary-text)"};border:1px solid ${g.shape === "QUAD" ? "var(--warning)" : "var(--accent-border)"};border-radius:6px;padding:1px 6px;margin-right:6px">${g.shape}</span>` : ""}${g.shortPath}${g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${g.makerPlanYieldPercent.toFixed(3)}%</div>` : ""}</td>
-      <td class="r txt-green">+${g.netYieldPercent.toFixed(3)}%</td>
-      <td class="r">$${g.estimatedProfitUsd.toFixed(2)}<div class="sub">@ $${g.optimalSizeUsd.toFixed(0)} optimal size</div></td>
-      <td class="r mono">${g.feeCostPercent.toFixed(3)}%</td>
-      <td class="c">${g.ticksSurvived}/${Math.round(settings.requiredTicks || 3)}</td>
-      <td class="c"><span style="color:${fillColor(g.fillScore)};font-weight:700">${g.fillScore}</span></td>
+      <td>${shapeBadgeHtml(g)}</td>
+      <td class="mono">${g.shortPath}${g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : ""}</td>
+      <td class="r txt-green">+${fmtPct(g.netYieldPercent, 3)}%</td>
+      <td class="r">${fmtUsd(g.estimatedProfitUsd)}<div class="sub">@ ${fmtUsd(g.optimalSizeUsd)} optimal size</div></td>
+      <td class="r mono">${fmtPct(g.feeCostPercent, 3)}%</td>
+      <td class="r mono">${fmtPct(g.slippagePercent, 4)}%</td>
       <td class="c">${Math.round(g.confidence)}%</td>
+      <td class="c"><span style="color:${fillColor(g.fillScore)};font-weight:700">${g.fillScore}</span></td>
       <td class="r mono">${fmtMs(g.gapAgeMs)}${g.stalenessMs < 2000 ? '<span class="dot-live">●</span>' : ""}</td>
     </tr>`).join("");
   tbody.querySelectorAll("tr.gap-row").forEach(tr => tr.onclick = () => openDossier(tr.dataset.id));
 }
 
-function expand(id) {
-  const g = liveMap.get(id);
-  if (!g) return;
-  document.querySelectorAll(".expanded").forEach(e => e.remove());
-  const ref = document.querySelector(`tr[data-id="${CSS.escape(id)}"]`);
-  if (!ref) return;
-  const tr = document.createElement("tr");
-  tr.className = "expanded";
-  tr.innerHTML = `<td colspan="9" class="expanded-inner">
-    <div class="grid-4">
-      <div class="kv"><div class="k" title="Raw loop product vs 1.0 before any costs">Gross gap</div><div class="v">+${g.grossGapPercent.toFixed(4)}%</div></div>
-      <div class="kv"><div class="k" title="Taker fee × N legs (default 0.05% × ${g.nLegs} = ${(g.feeCostPercent).toFixed(3)}%)">Fee cost (${g.nLegs} legs)</div><div class="v">${g.feeCostPercent.toFixed(3)}%</div></div>
-      <div class="kv"><div class="k" title="Gross gap − fees − slippage buffer">Net yield</div><div class="v" style="color:var(--success)">+${g.netYieldPercent.toFixed(3)}%</div></div>
-      <div class="kv hl"><div class="k" title="Binary-searched size so every leg fills while net yield stays ≥ threshold. This IS the OPTIMAL SIZE.">Optimal trade size</div><div class="v">$${g.optimalSizeUsd.toFixed(0)} @ +${g.optimalNetYieldPercent.toFixed(2)}%</div></div>
-      <div class="kv"><div class="k" title="Optimal size × net yield at that exact size">Est. profit</div><div class="v">$${g.estimatedProfitUsd.toFixed(2)}</div><div class="h">Profit can never exceed size × net%. High yield + low profit = thin books, small fills.</div></div>
-      <div class="kv"><div class="k" title="Average slippage across all legs, measured per leg">Slippage @ size</div><div class="v">${g.slippagePercent.toFixed(4)}%</div></div>
-      <div class="kv"><div class="k" title="How long the gap was open and confirmed before emission">Gap age</div><div class="v">${fmtMs(g.gapAgeMs)}</div></div>
-      <div class="kv"><div class="k" title="Age of the order-book snapshot used. &gt;1s is rejected">Data freshness</div><div class="v">${g.stalenessMs}ms</div></div>
-      <div class="kv"><div class="k" title="Confidence HEURISTIC: 60% order-book liquidity grade + 40% consecutive ticks survived. It is NOT a measured win rate — a gap can still vanish before you could execute it. Real outcomes appear in History as Uptime and Realized net.">CONF %</div><div class="v">${Math.round(g.confidence)}%</div></div>
-      <div class="kv"><div class="k" title="Consecutive 100ms WebSocket updates the gap persisted on fresh books">Ticks survived</div><div class="v">${g.ticksSurvived} / ${Math.round(settings.requiredTicks || 3)}</div></div>
-      <div class="kv"><div class="k" title="What the gap would be with 0% maker (limit-order) fees">Maker-plan floor</div><div class="v">${g.makerPlanYieldPercent > 0 ? "+" + g.makerPlanYieldPercent.toFixed(3) + "%" : "n/a"}</div></div>
-      <div class="kv"><div class="k" title="Liquidity grade A–F of the top 5 depth levels averaged across all legs">Fill score</div><div class="v" style="color:${fillColor(g.fillScore)}">${g.fillScore}</div></div>
-    </div>
-    <div style="margin-top:12px;font-size:0.72rem;color:var(--secondary-text)">Detected at ${new Date(g.detectedAt).toLocaleString()}</div>
-    <div class="chart" id="chart-${g.id}"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row"></div></div>
-    <div style="margin-top:16px">
-      <div class="ct" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--secondary-text);margin-bottom:8px">Live prices — same WebSocket feed</div>
-      <div class="grid-4" style="grid-template-columns:${g.legs && g.legs.length >= 4 ? "1fr 1fr 1fr 1fr" : "1fr 1fr 1fr"}">
-        ${(g.legs || []).map((lg, i) => `<div class="leg-box"><div class="lt">Leg ${i + 1} · ${lg.symbol} · ${lg.direction}</div><div class="lp">entry ask: ${fmtPrice(lg.entryPrice)}<br>fill price: ${fmtPrice(lg.fillPrice)}<div class="sub">depth $${lg.weightedVolumeUsd.toFixed(0)} · slippage ${(lg.slippagePct || 0).toFixed(4)}%</div></div></div>`).join("")}
-      </div>
-    </div>
-  </td>`;
-  ref.after(tr);
-  // size curve chart
-  const chartEl = document.getElementById(`chart-${g.id}`);
-  const row = chartEl.querySelector(".chart-row");
-  let pts = [];
-  try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
-  if (pts.length) {
-    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
-    row.innerHTML = pts.map(p => {
-      const h = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
-      const ok = p.net_yield >= 0;
-      return `<div class="chart-bar" title="$${p.size_usd.toFixed(0)} → ${p.net_yield.toFixed(4)}%"><div class="bv">${(p.net_yield * 100).toFixed(3)}%</div><div style="height:${h}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">$${p.size_usd.toFixed(0)}</div></div>`;
-    }).join("");
-  } else {
-    row.innerHTML = '<div style="font-size:0.7rem;color:var(--secondary-text);align-self:center">Size curve: unavailable (books changed before sizing).</div>';
-  }
-}
-
-let liveDossierId = null;
-
-function enrichHistory(o) {
-  if (!o || !o.resolved) return;
-  const idx = history.findIndex(h => h.id === o.id);
-  if (idx < 0) return;
-  history[idx].uptimeMs = o.uptimeMs;
-  history[idx].lastNetYieldPercent = o.lastNetYieldPercent;
-  history[idx].gapClosedAt = o.gapClosedAt;
-  history[idx].resolved = true;
-  saveHistory();
-  renderHistory();
-  if (document.getElementById("panel-dossier").classList.contains("active") && liveDossierId === o.id) openDossier(o.id);
-}
-
-function openDossier(id) {
-  const h = history.find(x => x.id === id) || liveMap.get(id);
-  if (!h) { document.getElementById("dossierBody").innerHTML = '<div style="padding:40px;text-align:center;color:var(--secondary-text)">Trade not found.</div>'; return; }
-  liveDossierId = id;
-  document.getElementById("tab-btn-dossier").style.display = "";
-  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "dossier"));
-  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-dossier"));
-  const g = { ...h };
-  const legs = (g.legs || []).map((lg, i) => `<div class="leg-box"><div class="lt">Leg ${i + 1} · ${lg.symbol} · ${lg.direction}</div><div class="lp">entry ask: ${fmtPrice(lg.entryPrice)}<br>fill price: ${fmtPrice(lg.fillPrice)}<div class="sub">depth $${(lg.weightedVolumeUsd || 0).toFixed(0)} · slippage ${(lg.slippagePct || 0).toFixed(4)}%</div></div></div>`).join("");
-  let pts = [];
-  try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
-  let chartHtml = '<div class="chart"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row"><div style="font-size:0.7rem;color:var(--secondary-text);align-self:center">Size curve: unavailable (books changed before sizing).</div></div></div>';
-  if (pts.length) {
-    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
-    chartHtml = `<div class="chart"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row">${pts.map(p => {
-      const hh = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
-      const ok = p.net_yield >= 0;
-      return `<div class="chart-bar" title="$${p.size_usd.toFixed(0)} → ${p.net_yield.toFixed(4)}%"><div class="bv">${(p.net_yield * 100).toFixed(3)}%</div><div style="height:${hh}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">$${p.size_usd.toFixed(0)}</div></div>`;
-    }).join("")}</div></div>`;
-  }
-  const up = g.uptimeMs ? fmtMs(g.uptimeMs) : (g.resolved ? "closed" : "still open");
-  const real = g.resolved && g.lastNetYieldPercent !== undefined ? ((g.lastNetYieldPercent >= 0 ? "+" : "") + g.lastNetYieldPercent.toFixed(3) + "%") : "—";
-  const realColor = g.resolved && g.lastNetYieldPercent !== undefined ? (g.lastNetYieldPercent >= 0 ? "var(--success)" : "var(--danger)") : "var(--secondary-text)";
-  const cols = legs.split("<div class=\"leg-box\">").length - 1;
-  const grid = cols === 3 ? "1fr 1fr 1fr" : "1fr 1fr 1fr 1fr";
-  document.getElementById("dossierBody").innerHTML = `
-    <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <span class="stat">${g.shape || (g.nLegs === 4 ? "QUAD" : "TRI")} · ${g.path}</span>
-      <span class="stat" style="color:var(--success)">Net +${(g.netYieldPercent || 0).toFixed(3)}%</span>
-      <span class="stat">Uptime: ${up}</span>
-      <span class="stat" style="color:${realColor}">Realized: ${real}</span>
-      <span class="stat">Detected ${new Date(g.detectedAt).toLocaleString()}</span>
-    </div>
-    <div class="grid-4" style="padding:0 16px">
-      <div class="kv"><div class="k">Gross gap</div><div class="v">+${(g.grossGapPercent || 0).toFixed(4)}%</div></div>
-      <div class="kv"><div class="k">Fee cost (${g.nLegs || "N"} legs)</div><div class="v">${(g.feeCostPercent || 0).toFixed(3)}%</div></div>
-      <div class="kv"><div class="k">Net yield</div><div class="v" style="color:var(--success)">+${(g.netYieldPercent || 0).toFixed(3)}%</div></div>
-      <div class="kv hl"><div class="k">Optimal trade size</div><div class="v">$${(g.optimalSizeUsd || 0).toFixed(0)} @ +${(g.optimalNetYieldPercent || 0).toFixed(2)}%</div></div>
-      <div class="kv"><div class="k">Est. profit</div><div class="v">$${(g.estimatedProfitUsd || 0).toFixed(2)}</div><div class="h">Size × net% at optimal size.</div></div>
-      <div class="kv"><div class="k">Slippage @ size</div><div class="v">${(g.slippagePercent || 0).toFixed(4)}%</div></div>
-      <div class="kv"><div class="k">Pre-emission gap age</div><div class="v">${fmtMs(g.gapAgeMs || 0)}</div></div>
-      <div class="kv"><div class="k">Data freshness</div><div class="v">${g.stalenessMs || 0}ms</div></div>
-      <div class="kv"><div class="k" title="Confidence HEURISTIC: 60% liquidity grade + 40% ticks survived. NOT a measured win rate.">CONF %</div><div class="v">${Math.round(g.confidence || 0)}%</div></div>
-      <div class="kv"><div class="k">Ticks survived</div><div class="v">${g.ticksSurvived} / ${Math.round(settings.requiredTicks || 3)}</div></div>
-      <div class="kv"><div class="k">Maker-plan floor</div><div class="v">${g.makerPlanYieldPercent > 0 ? "+" + g.makerPlanYieldPercent.toFixed(3) + "%" : "n/a"}</div></div>
-      <div class="kv"><div class="k">Fill score</div><div class="v" style="color:${fillColor(g.fillScore || "F")}">${g.fillScore || "—"}</div></div>
-    </div>
-    <div style="margin-top:16px">${chartHtml}</div>
-    <div style="margin-top:18px;padding:0 16px 16px">
-      <div class="ct" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--secondary-text);margin-bottom:8px">Order-book snapshot at detection — same WebSocket feed</div>
-      <div class="grid-4" style="grid-template-columns:${grid}">${legs}</div>
-    </div>
-    <div class="footer">All figures are the book snapshot at detection time. “Realized” = the net yield still measured when the gap closed (post-emission live re-validation). Live prices on the Live Pulse page update every 100ms.</div>`;
+function compressPath(path) {
+  // USDT → A → B → USDT → keep; hex paths get arrows trimmed to coins only when long
+  const pm = path.match(/^(\w+) → (.*?) → (\w+)$/);
+  if (pm && pm[1] === pm[3] && pm[1] !== "") return `${pm[1]} → ${pm[2]} → ${pm[1]}`;
+  return path;
 }
 
 function onOpportunity(g) {
-  if (g && g.resolved) { enrichHistory(g); return; }
   freshId = g.id; freshAt = Date.now();
-  // compress path for the table: USDT → A → B [→ C] → USDT when stables match USDT
-  const m = g.path.match(/USDT → ((\w+) → ?)+USDT/);
-  const pm = g.path.match(/^(\w+) → (.*?) → (\w+)$/);
-  g.shortPath = (pm && pm[1] === "USDT" && pm[3] === "USDT") ? `USDT → ${pm[2]} → USDT` : g.path;
+  g.shortPath = compressPath(g.path);
   liveMap.set(g.id, g);
   if (liveMap.size > 400) { const old = [...liveMap.keys()][0]; liveMap.delete(old); }
   renderLive();
-  // history
   history.unshift({ ...g, detectedAt: new Date(g.detectedAt).toISOString() });
   if (history.length > 2000) history.length = 2000;
   saveHistory();
@@ -503,13 +447,13 @@ function renderCoins(s) {
   document.getElementById("coinsInfo").textContent = coinsSnapshot.length > 0
     ? `${coinsSnapshot.length} coins currently in use`
     : "Building the live coin universe — this takes under a minute on first start…";
-  document.getElementById("coinsCrit").textContent = `criterion: $${testUsd} fills both sides ≤ ${maxSlip.toFixed(3)}% slip`;
+  document.getElementById("coinsCrit").textContent = `criterion: ${fmtUsd(testUsd)} fills both sides ≤ ${maxSlip.toFixed(3)}% slip`;
   const tbody = document.getElementById("coinsRows");
   if (coinsSnapshot.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Seeding… the tradability list appears once the live books are measured.</td></tr>'; return; }
-  const rows = [...coinsSnapshot].sort((a, b) => b.depthUsd - a.depthUsd).map((c, i) =>
-    `<tr><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">$${Math.round(c.vol24h || 0).toLocaleString()}</td><td class="r">$${Math.round(c.depthUsd || 0).toLocaleString()}</td>` +
+  const rows = [...coinsSnapshot].sort((a, b) => (b.depthUsd || 0) - (a.depthUsd || 0)).map((c, i) =>
+    `<tr><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">${fmtUsd(c.vol24h || 0)}</td><td class="r">${fmtUsd(c.depthUsd || 0)}</td>` +
     `<td class="r">${c.buySlipPct !== null ? c.buySlipPct.toFixed(4) + "%" : "no fill"}</td><td class="r">${c.sellSlipPct !== null ? c.sellSlipPct.toFixed(4) + "%" : "no fill"}</td>` +
-    `<td class="c" style="color:${c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip ? "var(--positive)" : "var(--warning)"}">${c.buySlipPct !== null && c.sellSlipPct !== null ? "YES" : "no"}</td></tr>`
+    `<td class="c" style="color:${c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip ? "var(--success)" : "var(--warning)"}">${c.buySlipPct !== null && c.sellSlipPct !== null ? "YES" : "no"}</td></tr>`
   ).join("");
   tbody.innerHTML = rows;
 }
@@ -528,29 +472,32 @@ function renderHistory() {
   document.getElementById("histCount").textContent = history.length ? `(${history.length})` : "";
   document.getElementById("histInfo").textContent = `${history.length} opportunities saved (browser storage, up to 2,000)`;
   const tbody = document.getElementById("histRows");
-  if (history.length === 0) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No history yet. Found opportunities appear here as they are verified.</td></tr>'; return; }
-  tbody.innerHTML = history.slice(0, 500).map(h => {
-    const pm = h.path.match(/^(\w+) → (.*?) → (\w+)$/);
-    const sp = (pm && pm[1] === "USDT" && pm[3] === "USDT") ? `USDT → ${pm[2]} → USDT` : h.path;
-    const up = h.uptimeMs ? fmtMs(h.uptimeMs) : "—";
-    const real = h.resolved ? (h.lastNetYieldPercent !== undefined ? ((h.lastNetYieldPercent >= 0 ? "+" : "") + h.lastNetYieldPercent.toFixed(3) + "%") : "closed") : "open";
-    return `<tr class="hist-row" style="cursor:pointer" data-id="${h.id}"><td>${new Date(h.detectedAt).toLocaleString()}</td><td>${h.shape ? `<span style="font-size:0.6rem;color:${h.shape === "QUAD" ? "var(--warning)" : "var(--secondary-text)"};border:1px solid ${h.shape === "QUAD" ? "var(--warning)" : "var(--accent-border)"};border-radius:6px;padding:1px 6px;margin-right:6px">${h.shape}</span>` : ""}${sp}</td><td class="r">+${h.netYieldPercent.toFixed(3)}%</td><td class="r">$${h.estimatedProfitUsd.toFixed(2)}</td><td class="r">$${h.optimalSizeUsd.toFixed(0)}</td><td class="c">${h.ticksSurvived}</td><td class="c">${Math.round(h.confidence)}%</td><td class="r">${up}</td><td class="r" style="color:${h.lastNetYieldPercent >= 0 ? "var(--success)" : "var(--danger)"}">${real}</td></tr>`;
-  }).join("");
-  tbody.querySelectorAll("tr.hist-row").forEach(tr => tr.onclick = () => { openDossier(tr.dataset.id); });
+  if (history.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No history yet. Verified opportunities appear here as they are found.</td></tr>'; return; }
+  tbody.innerHTML = history.slice(0, 500).map((h, i) => `
+    <tr class="gap-row" data-id="hist-${i}">
+      <td>${new Date(h.detectedAt).toLocaleString()}</td>
+      <td>${shapeBadgeHtml(h)}</td>
+      <td class="mono">${compressPath(h.path)}</td>
+      <td class="r">+${fmtPct(h.netYieldPercent, 3)}%</td>
+      <td class="r">${fmtUsd(h.estimatedProfitUsd)}</td>
+      <td class="r">${fmtUsd(h.optimalSizeUsd)}</td>
+      <td class="c">${h.ticksSurvived}</td>
+      <td class="c">${Math.round(h.confidence)}%</td>
+    </tr>`).join("");
+  tbody.querySelectorAll("tr.gap-row").forEach(tr => tr.onclick = () => openDossier(tr.dataset.id));
 }
 renderHistory();
 
 document.getElementById("btnExport").onclick = () => {
-  const maxLegs = Math.max(3, ...history.map(h => (h.legs || []).length));
-  const head = ["detected_at", "path", "shape", "net_yield_pct", "gross_gap_pct", "fee_cost_pct", "slippage_pct", "estimated_profit_usd", "optimal_size_usd", "optimal_net_yield_pct", "ticks_survived", "fill_score", "confidence_pct", "maker_plan_yield_pct", "uptime_ms", "realized_net_pct", "gap_closed_at", ...Array.from({ length: maxLegs }, (_, i) => ["leg" + (i + 1) + "_symbol", "leg" + (i + 1) + "_entry", "leg" + (i + 1) + "_fill", "leg" + (i + 1) + "_slippage_pct"]).flat()];
+  const head = ["detected_at", "path", "shape", "n_legs", "net_yield_pct", "gross_gap_pct", "fee_cost_pct", "slippage_pct",
+    "slippage_buffer_pct", "optimal_size_usd", "optimal_net_yield_pct", "capacity_usd", "est_profit_usd", "maker_floor_pct",
+    "confidence_pct", "ticks_survived", "fill_grade", "staleness_ms", "gap_age_ms", "legs"];
   const rows = history.map(h => {
-    const legs = h.legs || [];
-    const base = [h.detectedAt, h.path, h.shape || "TRI", h.netYieldPercent, h.grossGapPercent, h.feeCostPercent, h.slippagePercent, h.estimatedProfitUsd, h.optimalSizeUsd, h.optimalNetYieldPercent, h.ticksSurvived, h.fillScore, h.confidence, h.makerPlanYieldPercent, h.uptimeMs || "", h.lastNetYieldPercent !== undefined ? h.lastNetYieldPercent : "", h.gapClosedAt || ""];
-    const legCols = Array.from({ length: maxLegs }, (_, i) => {
-      const lg = legs[i] || {};
-      return [lg.symbol ?? "", lg.entryPrice ?? "", lg.fillPrice ?? "", lg.slippagePct ?? ""];
-    }).flat();
-    return base.concat(legCols).map(k => JSON.stringify(k ?? "")).join(",");
+    const base = [h.detectedAt, h.path, h.shape || "QUAD", h.nLegs || 4, h.netYieldPercent, h.grossGapPercent, h.feeCostPercent,
+      h.slippagePercent, settings.slippageBuffer * 100, h.optimalSizeUsd, h.optimalNetYieldPercent, h.capacityUsd,
+      h.estimatedProfitUsd, h.makerPlanYieldPercent, h.confidence, h.ticksSurvived, h.fillScore, h.stalenessMs, h.gapAgeMs,
+      JSON.stringify((h.legs || []).map(l => ({ sym: l.symbol, dir: l.direction, fill: l.fillPrice, slip: l.slippagePct })))];
+    return base.map(k => JSON.stringify(k ?? "")).join(",");
   });
   const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -560,6 +507,213 @@ document.getElementById("btnExport").onclick = () => {
 };
 document.getElementById("btnClearHist").onclick = () => { history.length = 0; saveHistory(); renderHistory(); };
 
+// ---------- connection & universe tests ----------
+document.getElementById("btnTestConn").onclick = async () => {
+  const out = document.getElementById("testOut");
+  out.textContent = "Testing…";
+  document.getElementById("btnTestConn").disabled = true;
+  document.getElementById("btnMeasureUniverse").disabled = true;
+  const lines = [];
+  const mark = (ok, name) => lines.push(`<span class="${ok ? "ok" : "fail"}">${ok ? "OK" : "FAIL"}</span> ${name}`);
+  const tryUrl = async (u, check) => {
+    try {
+      // walked through the full CORS fallback chain: direct first, then 6
+      // public proxies (corsproxy.io, allorigins raw/JSON, codetabs, htmldriven,
+      // thingproxy) — so it passes from any region/browser
+      const r = await corsFetch(u);
+      if (r.ok) { const j = await r.json(); return check ? check(j) : true; }
+      return "http " + r.status;
+    } catch (e) { return (e && e.name === "AbortError") ? "timeout" : String(e.message || e).slice(0, 80); }
+  };
+  const ticker = await tryUrl("https://api.mexc.com/api/v3/ticker/24hr", j => Array.isArray(j) && j.length > 500);
+  mark(ticker === true, "ticker/24hr (symbol list)");
+  const info = await tryUrl("https://api.mexc.com/api/v3/exchangeInfo", j => Array.isArray(j.symbols) && j.symbols.length > 1000);
+  mark(info === true, "exchangeInfo (base/quote splits)");
+  const depth = await tryUrl("https://api.mexc.com/api/v3/depth?symbol=BTCUSDT&limit=50", j => Array.isArray(j.bids) && j.bids.length > 5 && Array.isArray(j.asks) && j.asks.length > 5);
+  mark(depth === true, "depth (BTCUSDT top-of-book)");
+  let ws = "FAIL websocket blocked";
+  try {
+    ws = await new Promise(res => {
+      const w = new WebSocket("wss://wbs-api.mexc.com/ws");
+      w.binaryType = "arraybuffer";
+      const to = setTimeout(() => { w.close(); res("timeout"); }, 10000);
+      w.onopen = () => { w.send(JSON.stringify({ method: "SUBSCRIPTION", params: ["spot@public.aggre.depth.v3.api.pb@100ms@BTCUSDT"] })); };
+      w.onmessage = ev => { if (ev.data instanceof ArrayBuffer && ev.data.byteLength > 50) { clearTimeout(to); w.close(); res("OK — depth frames streaming"); } };
+      w.onerror = () => { clearTimeout(to); res("FAIL handshake"); };
+      w.onclose = () => res(s => typeof s === "string" && s.startsWith("OK") ? s : "FAIL closed early");
+    });
+  } catch {}
+  mark(String(ws).startsWith("OK"), "WebSocket wbs-api.mexc.com (protobuf depth)");
+  out.innerHTML = lines.join(" · ");
+  document.getElementById("btnTestConn").disabled = false;
+  document.getElementById("btnMeasureUniverse").disabled = false;
+};
+
+document.getElementById("btnMeasureUniverse").onclick = async () => {
+  const out = document.getElementById("testOut");
+  out.textContent = "Measuring coin tradability from live depth… (up to 90s)";
+  document.getElementById("btnTestConn").disabled = true;
+  document.getElementById("btnMeasureUniverse").disabled = true;
+  try {
+    const res = await buildUniverse(settings.minVol || DEFAULTS.minVol, settings.maxWhitelist || DEFAULTS.maxWhitelist, settings.liquidityTestUsd ?? DEFAULTS.liquidityTestUsd, settings.maxSlip ?? DEFAULTS.maxSlip);
+    const ok = [...res.liquidity.values()].filter(t => t.ok).length;
+    out.innerHTML = `<span class="ok">OK</span> universe: ${res.length} symbols watched · ${ok} coins passed the depth test at ${fmtUsd(res.liquidityTestUsd)} / ${fmtPct(res.maxSlip, 2)}% max slip · rest failed or were volume-filtered`;
+  } catch (e) {
+    out.innerHTML = `<span class="fail">FAIL</span> universe build: ${String(e && e.message || e).slice(0, 160)}`;
+  }
+  document.getElementById("btnTestConn").disabled = false;
+  document.getElementById("btnMeasureUniverse").disabled = false;
+};
+
+// ---------- dossier ----------
+const dossierEl = document.getElementById("dossier");
+let dossierTimer = null;
+function closeDossier() {
+  dossierEl.classList.remove("active");
+  if (dossierTimer) { clearInterval(dossierTimer); dossierTimer = null; }
+  historyLocation.hash = "";
+}
+function openDossier(id) {
+  const g = id.startsWith("hist-") ? history[parseInt(id.slice(5), 10)] : liveMap.get(id);
+  if (!g) return;
+  const n = g.nLegs || 4;
+  const body = document.getElementById("dossBody");
+  body.innerHTML = `
+    <div class="doss-head">
+      <div>
+        ${shapeBadgeHtml(g)}
+        <div class="doss-path">${g.path}</div>
+        <div class="doss-meta">Detected at ${new Date(g.detectedAt).toLocaleString()} · gap open ${fmtMs(g.gapAgeMs)} · survived ${g.ticksSurvived} consecutive 100ms ticks · data freshness ${g.stalenessMs}ms</div>
+      </div>
+      <button class="btn" id="dossBack">← Back</button>
+    </div>
+    <div class="section"><div class="sh">Outcome &amp; sizing</div>
+      <div class="grid-4">
+        <div class="kv hl"><div class="k">Net yield</div><div class="v">+${fmtPct(g.netYieldPercent, 4)}%</div><div class="h">Gross − (N × taker fee) − slippage buffer</div></div>
+        <div class="kv"><div class="k">Gross gap</div><div class="v">+${fmtPct(g.grossGapPercent, 4)}%</div><div class="h">Raw loop product vs 1.0</div></div>
+        <div class="kv"><div class="k">Fee cost (${n} legs × ${fmtPct(settings.takerFee, 3)}%)</div><div class="v">${fmtPct(g.feeCostPercent, 3)}%</div></div>
+        <div class="kv"><div class="k">Measured slippage</div><div class="v">${fmtPct(g.slippagePercent, 4)}%</div><div class="h">Weighted-fill average across all legs</div></div>
+        <div class="kv"><div class="k">Optimal trade size</div><div class="v">${fmtUsd(g.optimalSizeUsd)}</div><div class="h">Largest size that still nets ≥ ${fmtPct(settings.minProfitThreshold, 3)}% at every leg</div></div>
+        <div class="kv"><div class="k">Capacity (thinnest leg)</div><div class="v">${fmtUsd(g.capacityUsd)}</div><div class="h">Min USD fill across legs at optimal size</div></div>
+        <div class="kv"><div class="k">Net yield at optimal size</div><div class="v">+${fmtPct(g.optimalNetYieldPercent, 4)}%</div></div>
+        <div class="kv hl"><div class="k">Estimated profit</div><div class="v">${fmtUsd(g.estimatedProfitUsd)}</div><div class="h">optimal size × net yield at that exact size</div></div>
+        <div class="kv"><div class="k">Maker-plan floor (0% taker)</div><div class="v">+${fmtPct(g.makerPlanYieldPercent, 4)}%</div><div class="h">If filled by limit orders</div></div>
+        <div class="kv"><div class="k">Confidence</div><div class="v">${Math.round(g.confidence)}%</div><div class="h">60% depth grade + 40% tick persistence — a heuristic, not a guarantee</div></div>
+        <div class="kv"><div class="k">Fill grade</div><div class="v" style="color:${fillColor(g.fillScore)}">${g.fillScore}</div><div class="h">Avg USD depth of top levels across legs</div></div>
+        <div class="kv"><div class="k">Slippage buffer</div><div class="v">+${fmtPct(settings.slippageBuffer, 3)}%</div><div class="h">Extra safety margin already subtracted</div></div>
+      </div>
+    </div>
+    <div class="chart" id="sizeChart"><div class="ct">Net yield vs trade size — the curve that determines the optimal size (green = above threshold)</div><div class="chart-row"></div></div>
+    <div class="section" style="margin-top:18px"><div class="sh">Per-leg walkthrough (weighted-fill simulation)</div>
+      <table class="history">
+        <thead><tr><th>#</th><th>Pair</th><th>Direction</th><th class="r">Entry</th><th class="r">Fill price</th><th class="r">Slippage</th><th class="r">Depth $</th></tr></thead>
+        <tbody>${(g.legs || []).map((lg, i) => `
+          <tr><td>${i + 1}</td><td class="mono">${lg.symbol}</td><td style="color:${lg.direction === "buy" ? "var(--success)" : "var(--warning)"}">${lg.direction.toUpperCase()}</td>
+          <td class="r mono">${fmtPrice(lg.entryPrice)}</td><td class="r mono">${fmtPrice(lg.fillPrice)}</td>
+          <td class="r">${fmtPct(lg.slippagePct / 100, 4)}%</td><td class="r mono">${fmtUsd(lg.weightedVolumeUsd)}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="section"><div class="sh">Live price charts — every coin in the loop, marked with the trade</div>
+      <div class="grid-4" id="chartsGrid" style="grid-template-columns: 1fr 1fr">
+        ${(g.legs || []).map((lg, i) => `<div class="price-chart"><div class="pc-title"><span class="sym">${lg.symbol} · ${lg.direction}</span><span class="price" id="pp-${i}">—</span></div><div class="pc-sub">Mid price · spread · best bid/ask — polled from the live book every 2s</div><canvas id="cv-${i}"></canvas><div class="pc-mark" id="pm-${i}">Trade at ${fmtPrice(lg.fillPrice)} (slip ${fmtPct(lg.slippagePct / 100, 3)}%)</div></div>`).join("")}
+      </div>
+    </div>
+    <div class="section"><div class="sh">What would break this trade</div>
+      <div class="note">The gap must stay above ${(settings.minProfitThreshold * 100).toFixed(3)}% after ${n} fees of ${fmtPct(settings.takerFee, 3)}% each (${fmtPct(g.feeCostPercent, 3)}% total) and measured slippage of ${fmtPct(g.slippagePercent, 4)}%. At the optimal size of ${fmtUsd(g.optimalSizeUsd)}, the thinnest leg supports ${fmtUsd(g.capacityUsd)} — beyond that, slippage eats the margin. Every number above was computed from the live order-book snapshot at detection time, walked level by level like a real taker order.</div>
+    </div>`;
+  dossierEl.classList.add("active");
+  document.getElementById("dossBack").onclick = closeDossier;
+  document.getElementById("btnRestart").onclick = () => { restart().then(closeDossier); };
+  // size curve
+  let pts = [];
+  try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
+  const row = document.querySelector("#sizeChart .chart-row");
+  if (pts.length) {
+    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
+    row.innerHTML = pts.map(p => {
+      const h = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
+      const ok = p.net_yield >= 0;
+      return `<div class="chart-bar" title="${fmtUsd(p.size_usd)} → ${fmtPct(p.net_yield, 4)}%"><div class="bv">${fmtPct(p.net_yield, 3)}%</div><div style="height:${h}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">${fmtUsd(p.size_usd)}</div></div>`;
+    }).join("");
+  } else {
+    row.innerHTML = '<div style="font-size:0.68rem;color:var(--secondary-text);align-self:center">Size curve unavailable (books changed before sizing).</div>';
+  }
+  // live price charts: poll depth REST every 2s for each leg's pair
+  const canvases = (g.legs || []).map((_, i) => document.getElementById("cv-" + i));
+  const ctxs = canvases.map(c => (c ? c.getContext("2d") : null));
+  const samples = canvases.map(() => []);
+  const maxSamples = 180;
+  const draw = (idx, s) => {
+    const cv = canvases[idx], ctx = ctxs[idx];
+    if (!cv || !ctx) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+    ctx.scale(dpr, dpr);
+    const W = cv.clientWidth, H = cv.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+    const vals = s.map(x => x.m);
+    if (vals.length < 2) return;
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const range = Math.max(hi - lo, lo * 0.0005) || 1;
+    const pad = 14;
+    const xAt = i => pad + (i / (maxSamples - 1)) * (W - pad * 2);
+    const yAt = v => H - pad - ((v - lo) / range) * (H - pad * 2);
+    ctx.strokeStyle = "#10b981"; ctx.lineWidth = 1.6; ctx.beginPath();
+    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.m)) : ctx.lineTo(px, yAt(x.m)); });
+    ctx.stroke();
+    // spread shading
+    ctx.strokeStyle = "rgba(125,145,136,0.35)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.h)) : ctx.lineTo(px, yAt(x.h)); });
+    ctx.stroke();
+    ctx.beginPath();
+    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.l)) : ctx.lineTo(px, yAt(x.l)); });
+    ctx.stroke();
+    // trade mark line
+    const tp = yAt(g.legs[idx].fillPrice);
+    if (tp > pad && tp < H - pad) {
+      ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(pad, tp); ctx.lineTo(W - pad, tp); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#f59e0b"; ctx.font = "10px ui-monospace, monospace";
+      ctx.fillText("TRADE " + fmtPrice(g.legs[idx].fillPrice), pad, tp - 4);
+    }
+    const last = s[s.length - 1];
+    const el = document.getElementById("pp-" + idx);
+    if (el) { el.textContent = fmtPrice(last.m) + (last.sp ? " · spread " + last.sp.toFixed(4) + "%" : ""); }
+  };
+  const poll = async () => {
+    for (let i = 0; i < (g.legs || []).length; i++) {
+      const sym = g.legs[i].symbol;
+      try {
+        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 6000);
+        const d = await (await fetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=10", { signal: ac.signal })).json();
+        clearTimeout(t);
+        const b = d.bids && d.bids[0] ? parseFloat(d.bids[0][0]) : 0;
+        const a = d.asks && d.asks[0] ? parseFloat(d.asks[0][0]) : 0;
+        if (a > 0 && b > 0) {
+          const m = (a + b) / 2;
+          const sp = ((a - b) / m) * 100;
+          const s = samples[i]; s.push({ m, l: b, h: a, sp });
+          if (s.length > maxSamples) s.shift();
+          draw(i, s);
+        }
+      } catch {}
+    }
+  };
+  poll();
+  if (dossierTimer) clearInterval(dossierTimer);
+  dossierTimer = setInterval(poll, 2000);
+}
+
+// hash routing: #trade=<id>
+window.addEventListener("hashchange", () => {
+  const m = location.hash.match(/^#trade=(.+)$/);
+  if (m) openDossier(decodeURIComponent(m[1])); else closeDossier();
+});
+if (location.hash.match(/^#trade=/)) openDossier(decodeURIComponent(location.hash.slice(7)));
+
 async function restart() {
   setConnBadge("seeding");
   if (scanner) scanner.stop();
@@ -568,7 +722,6 @@ async function restart() {
   scanner = new Scanner(settings, onOpportunity, onStats);
   await scanner.start();
 }
-
 document.getElementById("btnRestart").onclick = restart;
 restart();
 </script>

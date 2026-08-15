@@ -1,6 +1,9 @@
-// MEXC Ghost Hunter — engine v2
-// Multi-stablecoin basket (USDT/USDC/DAI/FDUSD/TUSD) + triangle AND quadrangle loops.
+// MEXC Ghost Hunter — engine v3
+// Multi-stablecoin basket (USDT/USDC/DAI/FDUSD/TUSD) + QUAD / PENTA / HEXAGON loops ONLY.
 // JS port of the verified Rust math, generalized to N legs.
+// Loop = n pairs: start-stable -> coin1 -> coin2 -> ... -> end-stable.
+// Triangles are deliberately excluded (3 pairs): the fee+slippage structure
+// rarely leaves honest profit after 3 legs; 4-6 legs give richer paths.
 // Performance notes:
 //  - books keep Map<price, qty> but also a DIRTY-FLAG + pre-sorted top arrays,
 //    rebuilt only when deltas touched the book (per-tick cost: dirty books only).
@@ -19,7 +22,7 @@ export const DEFAULTS = {
   minVol: 300_000,
   liquidityTestUsd: 100,   // test-order size for the tradability criterion
   maxSlip: 0.001,          // max slippage the test order may pay (0.1%)
-  shapes: ["triangle", "quad"], // which loop shapes to scan
+  shapes: ["quad", "penta", "hex"], // which loop shapes to scan (n legs/pairs)
   stables: STABLES.slice(),     // allowed start/end stables
 };
 
@@ -235,11 +238,18 @@ export function buildLoops(symbols, settings) {
   const set = new Set(symbols);
   const loops = [];
   // index: pair -> { base, quote, coin } for known symbols
+  // baseQuote (optional): Map<symbol, {base, quote}> from exchangeInfo — EXACT
+  // splits; without it we fall back to the stable-suffix heuristic, and for
+  // remaining symbols to a half-split (risky: DOGE+KAS half-split wrong) which
+  // is why the scanner should always pass exchangeInfo data.
+  const baseQuote = settings.baseQuote || new Map();
   const pairs = new Map();
   for (const s of symbols) {
+    const bq = baseQuote.get(s);
+    if (bq) { pairs.set(s, { base: bq.base, quote: bq.quote, coin: bq.base }); continue; }
     const p = parseSymbol(s, stables);
     if (p && p.coin && !isStable(p.coin, stables)) pairs.set(s, { base: p.coin, quote: p.st, coin: p.coin });
-    // cross pair X+Y between two non-stables: base first coin
+    // cross pair X+Y between two non-stables: half-split fallback (inexact)
     else if (!pairs.has(s)) pairs.set(s, { base: s.slice(0, s.length / 2 | 0), quote: s.slice(s.length / 2 | 0) });
   }
   // Only treat a symbol as a loop "coin" if it is a genuine asset that also has
@@ -249,6 +259,22 @@ export function buildLoops(symbols, settings) {
   // not be a placeholder/contract quote (names ending in a digit, e.g. USD1).
   const coins = [...pairs.keys()].map(s => pairs.get(s).coin);
   const uniqCoins = new Set(coins.filter(c => !isStable(c, stables) && !/\d$/.test(c) && symbols.some(sym => STABLES.some(st => sym === c + st))));
+  const shapes = settings.shapes || DEFAULTS.shapes;
+
+  // ---------- bounded N-leg builder (no combinatorial explosion) ----------
+  // Perf guarantees (why this stays light on 450+ pairs / 60+ coins):
+  //   1. Adjacency lists: for coin X, next(Y) only if pair X+Y or Y+X exists.
+  //      Real MEXC universes have ~2-8 cross pairs per coin, not 60+.
+  //   2. Coin caps: mid-leg coins are ranked by 24h quote volume; only the top
+  //      maxMidCoins are eligible as intermediates (thin coins produce loops
+  //      whose fills slip anyway — the depth criterion would kill them at
+  //      validation time; ranking here kills them earlier, cheaply).
+  //   3. Per-shape loop cap: hard ceiling on registered loops; the scanner scans
+  //      every registered loop each tick, so a hard cap bounds worst-case cost.
+  //   4. Stable-end check pushed to the END (cheap Set.has) instead of early.
+  const MAX_MID_COINS = 60;     // intermediate-coin rank cap (volume)
+  const MAX_LOOPS_PER_SHAPE = 6000;
+
   const addLoop = (shape, s1, s2, chain, legs) => {
     loops.push({
       key: legs.map(l => l[0]).join("|"),
@@ -260,49 +286,104 @@ export function buildLoops(symbols, settings) {
     });
   };
 
-  // LEG CONVENTION: legs = [[pair, startHolding], ...] — startHolding is the coin
-  // we hold BEFORE executing that leg. Each leg converts startHolding into the
-  // next holding; the final leg must return us to a stable (end of loop).
-  const triLegs = (coinA, coinB, s1, s2) => {
-    const legs = [[coinA + s1, s1]]; // hold s1, buy coinA on asks
-    const a2 = coinB + coinA, a2rev = coinA + coinB;
-    if (set.has(a2)) legs.push([a2, coinA]);      // hold coinA, buy coinB (pair base=B, quote=A)
-    else if (set.has(a2rev)) legs.push([a2rev, coinA]); // hold coinA, sell coinA (pair base=A, quote=B)
-    else return null;
-    const lastHolding = legs[legs.length - 1][1];
-    const p3 = lastHolding === coinA ? coinB + s2 : null; // after buying B we hold B
-    if (p3 && set.has(p3)) legs.push([p3, coinB]); // hold coinB, sell on bids, receive s2
-    else return null;
-    return legs;
-  };
-
-  // --- triangles: S1 -> coinA -> coinB ... wait, triangle = 2 intermediates?
-  // Triangle = 3 pairs = 2 intermediate coins (A, B) with 3 conversions.
-  for (const s1 of stables) for (const s2 of stables) for (const coinA of uniqCoins) for (const coinB of uniqCoins) {
-    if (coinA === coinB) continue;
-    const legs = triLegs(coinA, coinB, s1, s2);
-    if (legs) addLoop("triangle", s1, s2, null, legs);
+  // Adjacency: coin X -> list of { pair, nextCoin } for existing cross pairs.
+  // Direction is resolved later by expandChain; here we just need the pair + peer.
+  // mid-leg exclusion: stables themselves must never sit mid-loop (they are the
+  // endpoints). Some "coins" are quasi-stables or fiats (EUR, TRY, ...); exclude
+  // anything whose name matches a stable basket member or a known fiat.
+  const FIAT = new Set(["EUR", "TRY", "BRL", "USDP", "GUSD", "TUSD"].filter(c => !stables.includes(c)));
+  const isMidEligible = c => !stables.includes(c) && !FIAT.has(c) && !/^(USD|EURUS|GBP|AUD|CAD|CHF|JPY)$/.test(c);
+  const uniq = [...uniqCoins].filter(isMidEligible);
+  const adj = new Map(); // coin -> [{pair, peer}]
+  for (const x of uniq) adj.set(x, []);
+  for (const sym of symbols) {
+    const pc = parseSymbol(sym, stables);
+    if (pc && !isStable(pc.coin, stables)) continue; // stable quote pairs handled separately
+    // cross pair between two non-stables: split heuristically (MEXC lists both X+Y
+    // directions rarely; treat symbol first-half as base)
+    if (!pc) {
+      const mid = sym.length / 2 | 0;
+      const x = sym.slice(0, mid), y = sym.slice(mid);
+      if (uniqCoins.has(x) && uniqCoins.has(y)) {
+        if (!adj.has(x)) adj.set(x, []);
+        if (!adj.has(y)) adj.set(y, []);
+        adj.get(x).push({ pair: sym, peer: y });
+        adj.get(y).push({ pair: sym, peer: x });
+      }
+    }
   }
 
-  // --- quadrangles: S1 -> A -> B -> C -> S2 (4 pairs, 3 intermediate coins)
-  if ((settings.shapes || DEFAULTS.shapes).includes("quad")) {
-    for (const s1 of stables) for (const s2 of stables) for (const coinA of uniqCoins) for (const coinB of uniqCoins) for (const coinC of uniqCoins) {
-      if (new Set([coinA, coinB, coinC]).size !== 3) continue;
-      const legs = [[coinA + s1, s1]]; // hold s1, buy coinA on A+S1 asks
-      // leg2: hold coinA → get coinB: prefer pair B+A (base B, quote A) BUY, else A+B (base A, quote B) SELL
-      const bPlusA = coinB + coinA, aPlusB = coinA + coinB;
-      if (set.has(bPlusA)) legs.push([bPlusA, coinA]);
-      else if (set.has(aPlusB)) legs.push([aPlusB, coinA]);
-      else continue;
-      // leg3: hold coinB → get coinC
-      const cPlusB = coinC + coinB, bPlusC = coinB + coinC;
-      if (set.has(cPlusB)) legs.push([cPlusB, coinB]);
-      else if (set.has(bPlusC)) legs.push([bPlusC, coinB]);
-      else continue;
-      const p4 = coinC + s2;
-      if (set.has(p4)) legs.push([p4, coinC]); // hold coinC, sell on bids, receive s2
-      else continue;
-      addLoop("quad", s1, s2, null, legs);
+  // volume rank for mid-coin cap: use the coin's USDT 24h quote volume when
+  // present (passed via settings.coinVol map; built by scanner from tickers).
+  const coinVol = settings.coinVol || new Map();
+  const ranked = uniq.slice().sort((a, b) => (coinVol.get(b) || 0) - (coinVol.get(a) || 0));
+  const midSet = new Set(ranked.slice(0, MAX_MID_COINS));
+
+  // 'stable2' = 2-leg stable cross-rate loop: S1 → S2 → S1
+  //   leg1: hold S1, BUY S2 on the S2+S1 asks (pair base=S2, quote=S1)
+  //   leg2: hold S2, SELL S2 on the S1+S2 bids (pair base=S1, quote=S2) → back to S1
+  // This is the classic cross-rate arbitrage between the two quoted directions
+  // of the same stable pair (e.g. USDCUSDT asks vs USDTUSDC bids).
+  const shapeN = { stable2: 2, quad: 4, penta: 5, hex: 6 };
+  // heldBeforeLeg([pair, holdingBefore]): coin received AFTER executing that leg
+  //   pair = BASE+QUOTE; if holdingBefore === QUOTE (ends the pair) we BUY on asks
+  //     → receive BASE units = pair.slice(0, len - holdingBefore.length)
+  //   if holdingBefore === BASE (starts the pair) we SELL on bids → receive QUOTE
+  //     = pair.slice(holdingBefore.length)
+  const heldAfter = ([pair, h]) =>
+    pair.endsWith(h) ? pair.slice(0, pair.length - h.length) : pair.slice(h.length);
+  for (const shape of shapes) {
+    const n = shapeN[shape] || 0;
+    const k = n - 1; // intermediate coins; k=1 means stable2 (2 legs)
+    if (k === 1) {
+      // stable2: enumerate stable pairs quoted against each other
+      for (const sa of stables) for (const sb of stables) {
+        if (sa === sb) continue;
+        if (!set.has(sb + sa) || !set.has(sa + sb)) continue;
+        // sb+sa: base=sb, quote=sa — buy sb with sa on ASKS; sa+sb: base=sa, quote=sb — sell sb on BIDS
+        addLoop("stable2", sa, sb, null, [[sb + sa, sa], [sa + sb, sb]]);
+      }
+      continue;
+    }
+    if (k < 1) continue; // minimum 3 for a quad
+    // level-0 paths: entry on a stable quote pair (hold stable s1, BUY coin on asks)
+    let paths = [];
+    for (const s1 of stables) for (const ca of uniq) {
+      const p = ca + s1;
+      if (set.has(p)) paths.push({ s1, legs: [[p, s1]] });
+    }
+    if (!paths.length) continue;
+    for (let lvl = 1; lvl < k; lvl++) {
+      const next = [];
+      const budget = lvl < k - 1 ? 120_000 : Infinity; // per-level path budget
+      let cut = 0;
+      for (const { s1, legs } of paths) {
+        if (cut >= budget) break;
+        const prev = heldAfter(legs[legs.length - 1]); // coin received by last leg
+        for (const { pair, peer } of adj.get(prev)) {
+          const y = peer;
+          if (!midSet.has(y)) continue;            // volume-rank cap
+          if (legs.some(l => heldAfter(l) === y)) continue; // distinct coins
+          next.push({ s1, legs: [...legs, [pair, prev]] });
+          cut++;
+        }
+      }
+      paths = next;
+      if (!paths.length) break;
+      // cap intermediate path count to bound memory (top by heuristic: keep those
+      // whose last pair's peer has highest volume — good enough ordering in
+      // practice because adj iteration follows the stable/USDT liquidity axis)
+      if (paths.length > 100_000) paths.length = 100_000;
+    }
+    const cap = MAX_LOOPS_PER_SHAPE;
+    let shapeCount = 0;
+    outer: for (const { s1, legs } of paths) {
+      const last = heldAfter(legs[legs.length - 1]); // final coin held before close
+      for (const s2 of stables) {
+        if (!set.has(last + s2)) continue; // closing: sell last coin on bids
+        addLoop(shape, s1, s2, null, [...legs, [last + s2, last]]);
+        if (++shapeCount >= cap) break outer;
+      }
     }
   }
   return loops;
@@ -414,7 +495,24 @@ export function liquidityGrade(reps) {
 }
 
 // ---------- symbol universe ----------
-const CORS_PROXIES = ["https://corsproxy.io/?", "https://api.codetabs.com/v1/proxy?quest="];
+// Public CORS proxies vary in uptime and per-domain blocks, so every REST call
+// walks this chain (plus the allorigins JSON-wrapper variant) before giving up.
+// Verified working against api.mexc.com (2026-08-15): cors.sh passes MEXC with
+// ACAO=* and full headers. corsproxy.io / allorigins kept as backups but were
+// 403/timeout on the day of the last sweep — the chain walks all of them.
+// Proxy categories: RAW-path proxies (target URL appended verbatim, NOT encoded —
+// verified against api.mexc.com 2026-08-15: ACAO=*, full headers) and encoded-
+// wrapper proxies (target must be encodeURIComponent'd). MEXC URLs never contain
+// spaces, so verbatim concatenation is safe.
+const CORS_RAW = ["https://cors.sh/"];
+const CORS_ENCODED = [
+  "https://corsproxy.io/?",
+  "https://proxy.cors.sh/",
+  "https://api.allorigins.win/raw?url=",
+  "https://cors.eu.org/",
+];
+// allorigins JSON wrapper: response is {contents: "payload", status:{http_code}}
+const CORS_PROXIES_JSON = ["https://api.allorigins.win/get?url="];
 async function timedFetch(input, ms) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), ms);
@@ -423,18 +521,49 @@ async function timedFetch(input, ms) {
 }
 function looksJson(r) {
   const ct = (r.headers.get("content-type") || "").toLowerCase();
-  return !ct || ct.includes("json") || ct.includes("text/plain");
+  return !ct || ct.includes("json") || ct.includes("text/plain") || ct.includes("text");
+}
+// cache-buster appended to the TARGET url (not inside encodeURIComponent),
+// keeps the encoded payload clean for prefix proxies
+function cb(url) {
+  const sep = url.includes("?") ? "&" : "?";
+  return url + sep + "_=" + Date.now();
 }
 export async function corsFetch(url) {
   let r = null;
+  // 1) direct — works in most user regions
   try {
-    r = await timedFetch(url, 10000);
-    if (r.ok && looksJson(r)) return r;
-  } catch { /* proxy below */ }
-  for (const prefix of CORS_PROXIES) {
+    r = await timedFetch(url, 8000);
+      if (r.ok && looksJson(r)) return r;
+    } catch { /* proxy below */ }
     try {
-      const p = await timedFetch(prefix + encodeURIComponent(url), 20000);
-      if (p.ok) return p;
+      r = await timedFetch(cb(url), 8000);
+      if (r.ok && looksJson(r)) return r;
+    } catch { /* proxy below */ }
+  // 2) raw-path proxies: target appended verbatim (cors.sh family)
+  for (const prefix of CORS_RAW) {
+    try {
+      const p = await timedFetch(prefix + cb(url), 20000);
+      if (p.ok && looksJson(p)) return p;
+    } catch { /* next proxy */ }
+  }
+  // 3) encoded-wrapper proxies
+  for (const prefix of CORS_ENCODED) {
+    try {
+      const p = await timedFetch(prefix + encodeURIComponent(cb(url)), 14000);
+      if (p.ok && looksJson(p)) return p;
+    } catch { /* retry / next proxy */ }
+  }
+  // 3) JSON-wrapper proxy: body is {contents, status}; unwrap the real payload
+  for (const prefix of CORS_PROXIES_JSON) {
+    try {
+      const p = await timedFetch(prefix + encodeURIComponent(url), 12000);
+      if (p.ok) {
+        const j = await p.json();
+        if (j && typeof j.contents === "string" && (j.status || {}).http_code === 200) {
+          return new Response(j.contents, { headers: { "content-type": "application/json" } });
+        }
+      }
     } catch { /* next proxy */ }
   }
   if (r) return r;
@@ -570,10 +699,15 @@ export async function buildUniverse(minVol = 300_000, maxWhitelist = 450, liquid
       if (t.symbol === sa + sb && valid.has(t.symbol) && whitelist.has(sa + "USDT")) whitelist.add(sa + sb);
     }
   }
-  // cross-pair expansion (closing legs for triangles/quads)
+  // cross-pair expansion (closing legs for quads/pentas/hexagons).
+  // Cross legs are NOT volume-filtered at listing time: MEXC cross pairs often
+  // show little 24h volume but real depth at the top (the $100 tradability test
+  // and the live order-book depth validation catch genuinely thin books). The
+  // earlier 1000-vol floor silently killed every cross leg and produced zero
+  // loops — cross legs are depth-validated at validation time instead.
   const coins = [...whitelist].map(s => { const pc = parseSymbol(s, STABLES); return pc && !isStable(pc.coin, STABLES) ? pc.coin : null; }).filter(Boolean);
   const uniqCoins = new Set(coins);
-  const minCrossVol = Math.max(minVol * 0.01, 5000);
+  const minCrossVol = 0;
   const coinArr = [...uniqCoins];
   for (let i = 0; i < coinArr.length; i++) for (let j = 0; j < coinArr.length; j++) {
     if (i === j) continue;

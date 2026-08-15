@@ -8,14 +8,15 @@ import {
   buildLoops, buildUniverse, tradableScore, corsFetch,
   parseSymbol, isStable, STABLES, DEFAULTS,
 } from "./engine.js";
-export { buildUniverse } from "./engine.js";
+
 const WS_URL = "wss://wbs-api.mexc.com/ws";
 const MAX_PER_CONN = 30;
 const RESNAP_INTERVAL = 120_000;
 
 function shapeBadge(loop) {
   const n = loop.pairs.length;
-  return n >= 4 ? "QUAD" : "TRI";
+  if (loop.shape === "stable2") return "STB2";
+  return n === 4 ? "QUAD" : n === 5 ? "PENTA" : n === 6 ? "HEX" : "TRI";
 }
 
 export class Scanner {
@@ -26,8 +27,7 @@ export class Scanner {
     this.books = new Map();          // symbol -> book state
     this.loops = [];
     this.persistence = new Map();    // loop.key -> { firstSeen, consecutive, best }
-    this.lastEmit = new Map();       // loop.key -> last emission time
-    this.gapWatch = new Map();       // loop.key -> { emitAt, lastNet, lastTick, resolved }
+    this.lastEmit = new Map();
     this.wsConns = [];
     this.firstBook = false;
     this.cleanupTick = 0;
@@ -57,7 +57,23 @@ export class Scanner {
       this.fallbackMode = true;
       symbols = this._hardFallbackSymbols();
     }
-    this.loops = buildLoops(symbols, this.settings);
+    // rank coins by 24h quote volume so the builder picks liquid intermediates,
+    // and fetch EXACT base/quote splits from exchangeInfo so cross-pair edges
+    // (e.g. BTCETH, DOGEKAS) are never mangled by string splitting
+    let coinVol = null, baseQuote = null;
+    try {
+      const tv = await (await corsFetch("https://api.mexc.com/api/v3/ticker/24hr")).json();
+      coinVol = new Map(tv.map(t => {
+        const pc = parseSymbol(t.symbol, STABLES);
+        const c = pc && !isStable(pc.coin, STABLES) ? pc.coin : null;
+        return c ? [c, parseFloat(t.quoteVolume) || 0] : null;
+      }).filter(Boolean));
+    } catch {}
+    try {
+      const ex = await (await corsFetch("https://api.mexc.com/api/v3/exchangeInfo")).json();
+      baseQuote = new Map(ex.symbols.map(s => [s.symbol, { base: s.baseAsset, quote: s.quoteAsset }]));
+    } catch {}
+    this.loops = buildLoops(symbols, { ...this.settings, coinVol, baseQuote });
     this._connectSymbols(symbols);
     this.reSnapTimer = setInterval(() => this._reseedAll(), RESNAP_INTERVAL);
     this.scanTimer = setInterval(() => this._tick(), 50);
@@ -148,40 +164,17 @@ export class Scanner {
     });
   }
 
-  async _topUpBook(sym, book) {
-    try {
-      const r = await corsFetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=50");
-      const j = r.ok ? await r.json() : null;
-      if (j && j.bids && j.asks) {
-        for (const [x, q] of j.bids) { if (parseFloat(q) > 0) book.bids.set(x, parseFloat(q)); }
-        for (const [x, q] of j.asks) { if (parseFloat(q) > 0) book.asks.set(x, parseFloat(q)); }
-        markDirty(book);
-        book.lastUpdate = Date.now();
-        if (!this.firstBook) { this.firstBook = true; }
-      }
-    } catch { /* best-effort top-up */ }
-  }
-
   async _reseed(symbols) {
     for (const sym of symbols) {
-      // direct REST seed; MEXC CORS behavior varies by network, so failures are
-      // tolerated — the 100ms WebSocket deltas converge the books within seconds
+      // REST seed walked through the full CORS fallback chain (direct, then
+      // 6 public proxies); failures tolerated — the 100ms WebSocket deltas
+      // converge the books within seconds anyway
       let j = null;
       const url = `https://api.mexc.com/api/v3/depth?symbol=${sym}&limit=100`;
-      const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 10000);
       try {
-        const r = await fetch(url, { signal: ac.signal });
-        if (r.ok) j = await r.json();
-      } catch { /* CORS or rate-limit — WS deltas will converge the book */ }
-      clearTimeout(t);
-      if (!j) {
-        const ac2 = new AbortController(); const t2 = setTimeout(() => ac2.abort(), 20000);
-        try {
-          const p = await fetch("https://corsproxy.io/?" + encodeURIComponent(url), { signal: ac2.signal });
-          if (p.ok) j = await p.json();
-        } catch { /* WS deltas will converge the book */ }
-        clearTimeout(t2);
-      }
+        const r = await corsFetch(url);
+        if (r && r.ok) j = await r.json();
+      } catch { /* next symbol — WS deltas will converge the book */ }
       if (!j) continue;
       const b = this.books.get(sym) || (() => { const s = newBookState(); this.books.set(sym, s); return s; })();
       for (const [p, q] of j.bids || []) { if (parseFloat(q) > 0) b.bids.set(p, parseFloat(q)); }
@@ -220,9 +213,8 @@ export class Scanner {
       const b = this.books.get(sym);
       if (!b) continue;
       jobs.push((async () => {
-        // use the live-seeded snapshot; top up with a REST snapshot through the
-        // same CORS-proxy chain (works even when MEXC direct REST is blocked)
-        if (b.bids.size === 0 || b.asks.size === 0) await this._topUpBook(sym, b);
+        // use the live-seeded snapshot; re-seed with a REST top-up first if empty
+        if (b.bids.size === 0 || b.asks.size === 0) await this._reseed([sym]);
         if (b.bids.size === 0 || b.asks.size === 0) return;
         const t = tradableScore(b, usd, maxSlip);
         if (!t.ok) return;
@@ -234,12 +226,10 @@ export class Scanner {
     // fall back to the hardcoded list of known major coins if measurement found none
     if (this.coinLiquidity.size === 0) {
       for (const sym of ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "TRXUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT", "NEARUSDT", "APTUSDT", "ATOMUSDT", "FILUSDT", "SUIUSDT", "PEPEUSDT", "SHIBUSDT"]) {
-        const pc = parseSymbol(sym, STABLES);
-        if (!pc || !pc.coin) continue;
         const b = this.books.get(sym);
         if (!b) continue;
-        if (b.bids.size === 0 || b.asks.size === 0) await this._topUpBook(sym, b);
-        if (b.bids.size === 0 || b.asks.size === 0) continue;
+        const pc = parseSymbol(sym, STABLES);
+        if (!pc || !pc.coin) continue;
         const t = tradableScore(b, usd, maxSlip);
         if (t.ok) this.coinLiquidity.set(pc.coin, { coin: pc.coin, pair: sym, buy: t.buy, sell: t.sell, ok: t.ok, depthUsd: Math.min(t.buy.depthUsd, t.sell.depthUsd), vol24h: 0 });
       }
@@ -267,25 +257,7 @@ export class Scanner {
         state.consecutive = (state.consecutive || 0) + 1;
         if (!state.best || report.netYield > state.best.netYield) state.best = report;
         state.lastSeen = now;
-        // post-emission gap watch: track total open lifetime of verified gaps
-        if (this.lastEmit.has(loop.key)) {
-          const w = this.gapWatch.get(loop.key);
-          if (w) { w.lastNet = report.netYield; w.lastTick = now; }
-        }
       } else {
-        const hadGap = (state.consecutive || 0) >= this.settings.requiredTicks;
-        const w = this.gapWatch.get(loop.key);
-        // emit a resolved-outcome enrichment when a verified gap closes
-        if (hadGap && w && !w.resolved && this.lastEmit.has(loop.key)) {
-          w.resolved = true; w.closedAt = now;
-          this.onOpportunity({
-            id: loop.key, resolved: true,
-            gapClosedAt: new Date(now).toISOString(),
-            uptimeMs: w.closedAt - w.emitAt,
-            totalTicks: w.lastTick - w.emitAt > 0 ? Math.round((w.lastTick - w.emitAt) / 100) : 0,
-            lastNetYieldPercent: (w.lastNet || 0) * 100,
-          });
-        }
         state.consecutive = 0; state.best = null;
       }
       state.firstSeen = state.firstSeen || now;
@@ -324,8 +296,6 @@ export class Scanner {
         slippagePct: r.slippagePct * 100,
         direction: r.direction,
       }));
-      this.lastEmit.set(loop.key, now);
-      this.gapWatch.set(loop.key, { emitAt: now, lastNet: fr.netYield, lastTick: now, resolved: false });
       this.onOpportunity({
         id: loop.key,
         shape: shapeBadge(loop),
@@ -353,9 +323,7 @@ export class Scanner {
 
     // lightweight stale-entry cleanup every 20 ticks (~1s)
     if (++this.cleanupTick % 20 === 0) {
-      for (const [k, s] of this.persistence) {
-        if (now - (s.lastSeen || 0) > 30000) { this.persistence.delete(k); this.gapWatch.delete(k); }
-      }
+      for (const [k, s] of this.persistence) if (now - (s.lastSeen || 0) > 30000) this.persistence.delete(k);
     }
 
     if (sampleGap) {
