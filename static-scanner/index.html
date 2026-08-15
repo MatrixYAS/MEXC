@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEXC Ghost Hunter — Arbitrage Scanner (Triangles &amp; Quadrangles)</title>
+<style>
+:root {
+  --background: #0a0f0d;
+  --surface: #101614;
+  --surface-2: #161e1b;
+  --accent-border: #1e2b26;
+  --primary-text: #e8f0ec;
+  --secondary-text: #7d9188;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--background); color: var(--primary-text); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; min-height: 100vh; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 28px 24px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+h1 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+h1 span { color: var(--success); }
+header p { color: var(--secondary-text); font-size: 0.85rem; margin-top: 4px; max-width: 760px; }
+.status-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.badge { padding: 6px 14px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; border: 1px solid; white-space: nowrap; }
+.badge.live { border-color: var(--success); color: var(--success); }
+.badge.off { border-color: var(--danger); color: var(--danger); }
+.badge.pending { border-color: var(--warning); color: var(--warning); }
+.badge.warn { border-color: var(--warning); color: var(--warning); }
+.stat { color: var(--secondary-text); font-size: 0.82rem; }
+.stat b { color: var(--primary-text); font-weight: 600; }
+.tab-row { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--accent-border); }
+.tab { padding: 10px 18px; font-size: 0.85rem; color: var(--secondary-text); cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600; }
+.tab.active { color: var(--primary-text); border-color: var(--success); }
+.tab:hover { color: var(--primary-text); }
+.panel { display: none; }
+.panel.active { display: block; }
+.surface { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 16px; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 14px 16px; font-size: 0.72rem; font-weight: 600; color: var(--secondary-text); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--accent-border); }
+th.r, td.r { text-align: right; }
+th.c, td.c { text-align: center; }
+td { padding: 16px 16px; font-size: 0.9rem; border-bottom: 1px solid var(--accent-border); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr.gap-row { cursor: pointer; }
+tr.gap-row:hover td { background: rgba(16,185,129,0.06); }
+td.mono { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+td .sub { font-size: 0.72rem; color: var(--secondary-text); margin-top: 2px; font-family: ui-sans-serif, system-ui; }
+.txt-green { color: var(--success); font-weight: 700; }
+.fresh-row td { background: rgba(16,185,129,0.12); }
+.dot-live { color: var(--success); margin-left: 4px; }
+.empty { text-align: center; padding: 56px 24px; color: var(--secondary-text); }
+.expanded { background: var(--surface); border-top: 1px solid var(--accent-border); }
+.expanded-inner { padding: 20px 24px 26px; }
+.grid-4 { display: grid; grid-cols: 1fr 1fr 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid-4 { grid-cols: 1fr 1fr; } }
+@media (max-width: 560px) { .grid-4 { grid-cols: 1fr; } }
+.kv { font-size: 0.82rem; }
+.kv .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
+.kv .v { font-weight: 600; margin-top: 2px; }
+.kv .h { font-size: 0.66rem; color: var(--secondary-text); opacity: 0.65; margin-top: 2px; }
+.kv.hl .v { color: var(--success); }
+.leg-box { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 12px; padding: 12px 14px; font-size: 0.8rem; }
+.leg-box .lt { font-size: 0.66rem; text-transform: uppercase; color: var(--secondary-text); letter-spacing: 0.06em; }
+.leg-box .lp { font-family: ui-monospace, monospace; margin-top: 6px; line-height: 1.7; }
+.chart { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--accent-border); }
+.chart .ct { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); margin-bottom: 8px; }
+.chart-row { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
+.chart-bar { flex: 1; border-radius: 4px 4px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.chart-bar .bv { font-size: 0.6rem; color: var(--secondary-text); margin-bottom: 2px; white-space: nowrap; }
+.chart-bar .bl { font-size: 0.6rem; color: var(--secondary-text); margin-top: 2px; }
+.btn { padding: 8px 18px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; cursor: pointer; border: 1px solid var(--accent-border); background: var(--surface-2); color: var(--primary-text); }
+.btn:hover { border-color: var(--success); }
+.btn.primary { background: var(--success); color: #031b13; border-color: var(--success); }
+.form-row { display: flex; flex-wrap: wrap; gap: 14px; margin: 18px 0; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+.field label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); }
+.field input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; padding: 9px 12px; color: var(--primary-text); font-size: 0.9rem; font-family: ui-monospace, monospace; width: 100%; }
+.field input:focus { outline: none; border-color: var(--success); }
+.field .fh { font-size: 0.66rem; color: var(--secondary-text); opacity: 0.7; }
+.note { color: var(--secondary-text); font-size: 0.78rem; line-height: 1.7; margin-top: 12px; max-width: 860px; }
+.footer { margin-top: 26px; text-align: center; font-size: 0.72rem; color: var(--secondary-text); }
+table.history td { font-family: ui-monospace, monospace; font-size: 0.78rem; }
+/* password gate */
+#gate { position: fixed; inset: 0; background: rgba(6,10,8,0.96); z-index: 50; display: flex; align-items: center; justify-content: center; }
+#gate.hidden { display: none; }
+#gate .card { background: var(--surface); border: 1px solid var(--accent-border); border-radius: 18px; padding: 32px; width: 340px; text-align: center; }
+#gate input { background: var(--surface-2); border: 1px solid var(--accent-border); border-radius: 10px; padding: 11px 14px; color: var(--primary-text); font-size: 0.95rem; width: 100%; margin: 14px 0; font-family: ui-monospace, monospace; }
+#gate .err { color: var(--danger); font-size: 0.8rem; margin-top: 8px; display: none; }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="card">
+    <h1 style="font-size:1.25rem">MEXC Ghost Hunter</h1>
+    <p style="color:var(--secondary-text);font-size:0.82rem;margin-top:8px">Private scanner. Enter access password.</p>
+    <input id="gateInput" type="password" placeholder="password" autofocus>
+    <button class="btn primary" id="gateBtn">Enter</button>
+    <div class="err" id="gateErr">Wrong password.</div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>MEXC <span>Ghost Hunter</span></h1>
+      <p>Triangular &amp; quadrangular arbitrage scanner — stable → A → B [→ C] → stable loops over USDT · USDC · DAI · FDUSD · TUSD. Live MEXC order books (WebSocket 100ms + REST re-seed). Truthful costs: 0.05% taker × N legs + measured slippage. Nothing trades — scanning and simulation only.</p>
+    </div>
+    <div class="status-row">
+      <div id="stConn" class="badge off">● DISCONNECTED</div>
+      <div id="stPending" class="badge pending" style="display:none">● 0 pending</div>
+      <div class="stat">Books: <b id="stBooks">0</b></div>
+      <div class="stat">Loops: <b id="stLoops">0</b></div>
+      <div class="stat">Best live gap: <b id="stBest">—</b></div>
+      <button class="btn" id="btnRestart">Restart scan</button>
+    </div>
+  </header>
+
+  <div class="tab-row">
+    <div class="tab active" data-tab="live">Live Pulse</div>
+    <div class="tab" data-tab="history">History <span id="histCount"></span></div>
+    <div class="tab" data-tab="coins">Coins <span id="coinsCount"></span></div>
+    <div class="tab" data-tab="settings">Settings &amp; Universe</div>
+    <div class="tab" id="tab-btn-dossier" data-tab="dossier" style="display:none">Trade Dossier</div>
+  </div>
+
+  <div class="panel active" id="panel-live">
+    <div class="surface">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit / optimal size</th>
+            <th class="r">Fee cost</th><th class="c">Ticks</th><th class="c">Fill</th><th class="c">Conf %</th><th class="r">Age</th>
+          </tr>
+        </thead>
+        <tbody id="liveRows">
+          <tr><td colspan="9" class="empty">Connecting to MEXC and seeding order books…<br>Finding verified gaps takes a few minutes of watching the market.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="footer">
+      Click any row for the full trade dossier • Fees: 0.05% taker × N legs per loop (configurable) • Verified = weighted-fill simulation passed + tick persistence + 1s staleness gate
+    </div>
+  </div>
+
+  <div class="panel" id="panel-coins">
+    <div class="surface">
+      <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="stat" id="coinsInfo">Measuring live tradability…</span>
+        <span class="stat" id="coinsCrit"></span>
+      </div>
+      <table class="history">
+        <thead>
+          <tr>
+            <th>#</th><th>Coin</th><th>Pair</th><th class="r">24h volume</th><th class="r">Depth (top 20)</th>
+            <th class="r">Buy $100 slip</th><th class="r">Sell $100 slip</th><th class="c">Tradeable</th>
+          </tr>
+        </thead>
+        <tbody id="coinsRows"></tbody>
+      </table>
+    </div>
+    <div class="footer">Every coin the scanner is using right now, measured live from the MEXC order book. “Tradeable” = a $100 taker order fills in both directions with slippage at or below your maximum — this is how the universe is selected, not 24h volume alone.</div>
+  </div>
+
+  <div class="panel" id="panel-history">
+    <div class="surface">
+      <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="stat" id="histInfo">0 opportunities saved (browser session)</span>
+        <button class="btn primary" id="btnExport">Export CSV</button>
+        <button class="btn" id="btnClearHist">Clear</button>
+      </div>
+      <table class="history">
+        <thead>
+          <tr>
+            <th>Detected at</th><th>Path</th><th class="r">Net yield</th><th class="r">Profit</th>
+            <th class="r">Optimal size</th><th class="c">Ticks</th><th class="c">Conf %</th><th class="r">Uptime</th><th class="r">Realized</th>
+          </tr>
+        </thead>
+        <tbody id="histRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-dossier">
+    <div class="surface" id="dossierBody"><div style="padding:40px;text-align:center;color:var(--secondary-text)">Select a trade from History to view its full dossier.</div></div>
+  </div>
+
+  <div class="panel" id="panel-settings">
+    <div class="surface" style="padding:20px 24px">
+      <div class="form-row">
+        <div class="field">
+          <label>Min net yield %</label>
+          <input id="cfgThreshold" type="number" step="0.0001" min="0">
+          <div class="fh">Minimum net gap after fees &amp; slippage</div>
+        </div>
+        <div class="field">
+          <label>Taker fee % per leg</label>
+          <input id="cfgFee" type="number" step="0.001" min="0">
+          <div class="fh">MEXC spot taker default 0.05%</div>
+        </div>
+        <div class="field">
+          <label>Slippage buffer %</label>
+          <input id="cfgSlip" type="number" step="0.001" min="0">
+          <div class="fh">Extra safety margin per loop</div>
+        </div>
+        <div class="field">
+          <label>Reference size $</label>
+          <input id="cfgSize" type="number" step="50" min="100">
+          <div class="fh">Dollar size used to measure fills (optimal size is searched around it)</div>
+        </div>
+        <div class="field">
+          <label>Required ticks</label>
+          <input id="cfgTicks" type="number" step="1" min="1" max="10">
+          <div class="fh">Consecutive 100ms updates the gap must survive</div>
+        </div>
+        <div class="field">
+          <label>Tradability test size $</label>
+          <input id="cfgTestUsd" type="number" step="10" min="10">
+          <div class="fh">The coin must fill this order in both directions to be used (default 100)</div>
+        </div>
+        <div class="field">
+          <label>Max slippage % for test</label>
+          <input id="cfgMaxSlip" type="number" step="0.01" min="0">
+          <div class="fh">Maximum slippage the test order may pay (default 0.1%)</div>
+        </div>
+        <div class="field">
+          <label>Loop shapes</label>
+          <div style="display:flex;gap:16px;align-items:center;margin-top:4px">
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" id="cfgTri" style="margin-right:6px">Triangles (3 pairs)</label>
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" id="cfgQuad" style="margin-right:6px">Quadrangles (4 pairs)</label>
+          </div>
+          <div class="fh">Quads add an extra intermediate coin: stable → A → B → C → stable</div>
+        </div>
+        <div class="field">
+          <label>Stablecoin basket</label>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:4px">
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="USDT" style="margin-right:4px">USDT</label>
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="USDC" style="margin-right:4px">USDC</label>
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="DAI" style="margin-right:4px">DAI</label>
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="FDUSD" style="margin-right:4px">FDUSD</label>
+            <label style="font-weight:normal;cursor:pointer"><input type="checkbox" class="cfgStable" value="TUSD" style="margin-right:4px">TUSD</label>
+          </div>
+          <div class="fh">Loops may start in any selected stable and end in any selected stable (e.g. USDT → A → B → USDC)</div>
+        </div>
+        <button class="btn primary" id="btnSaveCfg">Apply &amp; restart</button>
+      </div>
+      <div class="note">
+        All settings are client-side: they are stored in this browser only and applied the moment you restart the scan.
+        The scanner connects to MEXC's public market-data endpoints — no API key is required.
+        Net yield = gross gap − (N × taker fee) − slippage buffer, where N is 3 legs (triangle) or 4 legs (quadrangle). Optimal trade size is binary-searched so every leg fills while net yield stays at or above your minimum.
+        Profit shown = optimal size × net yield at that exact size — small capacity + high yield is how the market pays out on thin books.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { Scanner } from "./scanner.js";
+import { DEFAULTS } from "./engine.js";
+
+const PWD = "gh_live_nokey";
+const gate = document.getElementById("gate");
+const gateInput = document.getElementById("gateInput");
+if (sessionStorage.getItem("gh_ok")) gate.classList.add("hidden");
+document.getElementById("gateBtn").onclick = checkPwd;
+gateInput.addEventListener("keydown", e => { if (e.key === "Enter") checkPwd(); });
+function checkPwd() {
+  if (gateInput.value === PWD) { sessionStorage.setItem("gh_ok", "1"); gate.classList.add("hidden"); }
+  else document.getElementById("gateErr").style.display = "block";
+}
+
+// tabs
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  document.getElementById("panel-" + t.dataset.tab).classList.add("active");
+});
+
+// config defaults
+const cfgIds = { cfgThreshold: "minProfitThreshold", cfgFee: "takerFee", cfgSlip: "slippageBuffer", cfgSize: "targetVolumeUsd", cfgTicks: "requiredTicks", cfgTestUsd: "liquidityTestUsd", cfgMaxSlip: "maxSlip" };
+const STABLE_LIST = ["USDT", "USDC", "DAI", "FDUSD", "TUSD"];
+const fmt = { cfgThreshold: v => (v * 100).toFixed(4), cfgFee: v => (v * 100).toFixed(3), cfgSlip: v => (v * 100).toFixed(3), cfgSize: v => String(Math.round(v)), cfgTicks: v => String(Math.round(v)), cfgTestUsd: v => String(Math.round(v)), cfgMaxSlip: v => (v * 100).toFixed(3) };
+function loadCfg() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("gh_cfg") || "{}");
+    const merged = { ...DEFAULTS, ...saved };
+    for (const [id, key] of Object.entries(cfgIds)) {
+      document.getElementById(id).value = (key === "minProfitThreshold" || key === "takerFee" || key === "slippageBuffer") ? ((merged[key] || 0) * 100).toFixed(3) : fmt[id](merged[key]);
+    }
+    document.getElementById("cfgTri").checked = (merged.shapes || DEFAULTS.shapes).includes("triangle");
+    document.getElementById("cfgQuad").checked = (merged.shapes || DEFAULTS.shapes).includes("quad");
+    for (const st of STABLE_LIST) {
+      const cb = document.querySelector(`.cfgStable[value="${st}"]`);
+      if (cb) cb.checked = (merged.stables || DEFAULTS.stables).includes(st);
+    }
+    return merged;
+  } catch { return { ...DEFAULTS }; }
+}
+let settings = loadCfg();
+document.getElementById("btnSaveCfg").onclick = () => {
+  const raw = {};
+  for (const [id, key] of Object.entries(cfgIds)) {
+    const v = parseFloat(document.getElementById(id).value);
+    if (!isNaN(v)) raw[key] = key === "takerFee" || key === "minProfitThreshold" || key === "slippageBuffer" || key === "maxSlip" ? v / 100 : v;
+  }
+  const shapes = [document.getElementById("cfgTri").checked ? "triangle" : null, document.getElementById("cfgQuad").checked ? "quad" : null].filter(Boolean);
+  const stables = [...document.querySelectorAll(".cfgStable:checked")].map(cb => cb.value);
+  raw.shapes = shapes.length ? shapes : DEFAULTS.shapes;
+  raw.stables = stables.length ? stables : DEFAULTS.stables;
+  localStorage.setItem("gh_cfg", JSON.stringify(raw));
+  settings = { ...DEFAULTS, ...raw };
+  restart();
+};
+
+const history = JSON.parse(localStorage.getItem("gh_hist") || "[]");
+let liveMap = new Map();
+let scanner = null;
+let freshId = null, freshAt = 0;
+
+const fmtPrice = p => p === 0 ? "—" : p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(6) : p.toFixed(8);
+const fmtMs = ms => ms < 1000 ? ms + "ms" : Math.floor(ms / 1000) + "s";
+const fillColor = s => ({ A: "#10b981", B: "#34d399", C: "#f59e0b", D: "#f97316", F: "#ef4444" }[s.charAt(0)] || "#7d9188");
+
+function renderLive() {
+  const tbody = document.getElementById("liveRows");
+  const rows = [...liveMap.values()].sort((a, b) => b.confidence - a.confidence || b.netYieldPercent - a.netYieldPercent).slice(0, 60);
+  if (rows.length === 0) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No verified gaps yet.<br>Loops (triangles &amp; quadrangles) must pass weighted-fill simulation across every leg and survive the required consecutive ticks.</td></tr>'; return; }
+  const now = Date.now();
+  tbody.innerHTML = rows.map(g => `
+    <tr class="gap-row ${freshId === g.id && now - freshAt < 700 ? "fresh-row" : ""}" data-id="${g.id}">
+      <td class="mono" style="color:var(--secondary-text)">${new Date(g.detectedAt).toLocaleTimeString()}</td>
+      <td class="mono">${g.shape ? `<span style="font-size:0.66rem;color:${g.shape === "QUAD" ? "var(--warning)" : "var(--secondary-text)"};border:1px solid ${g.shape === "QUAD" ? "var(--warning)" : "var(--accent-border)"};border-radius:6px;padding:1px 6px;margin-right:6px">${g.shape}</span>` : ""}${g.shortPath}${g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${g.makerPlanYieldPercent.toFixed(3)}%</div>` : ""}</td>
+      <td class="r txt-green">+${g.netYieldPercent.toFixed(3)}%</td>
+      <td class="r">$${g.estimatedProfitUsd.toFixed(2)}<div class="sub">@ $${g.optimalSizeUsd.toFixed(0)} optimal size</div></td>
+      <td class="r mono">${g.feeCostPercent.toFixed(3)}%</td>
+      <td class="c">${g.ticksSurvived}/${Math.round(settings.requiredTicks || 3)}</td>
+      <td class="c"><span style="color:${fillColor(g.fillScore)};font-weight:700">${g.fillScore}</span></td>
+      <td class="c">${Math.round(g.confidence)}%</td>
+      <td class="r mono">${fmtMs(g.gapAgeMs)}${g.stalenessMs < 2000 ? '<span class="dot-live">●</span>' : ""}</td>
+    </tr>`).join("");
+  tbody.querySelectorAll("tr.gap-row").forEach(tr => tr.onclick = () => openDossier(tr.dataset.id));
+}
+
+function expand(id) {
+  const g = liveMap.get(id);
+  if (!g) return;
+  document.querySelectorAll(".expanded").forEach(e => e.remove());
+  const ref = document.querySelector(`tr[data-id="${CSS.escape(id)}"]`);
+  if (!ref) return;
+  const tr = document.createElement("tr");
+  tr.className = "expanded";
+  tr.innerHTML = `<td colspan="9" class="expanded-inner">
+    <div class="grid-4">
+      <div class="kv"><div class="k" title="Raw loop product vs 1.0 before any costs">Gross gap</div><div class="v">+${g.grossGapPercent.toFixed(4)}%</div></div>
+      <div class="kv"><div class="k" title="Taker fee × N legs (default 0.05% × ${g.nLegs} = ${(g.feeCostPercent).toFixed(3)}%)">Fee cost (${g.nLegs} legs)</div><div class="v">${g.feeCostPercent.toFixed(3)}%</div></div>
+      <div class="kv"><div class="k" title="Gross gap − fees − slippage buffer">Net yield</div><div class="v" style="color:var(--success)">+${g.netYieldPercent.toFixed(3)}%</div></div>
+      <div class="kv hl"><div class="k" title="Binary-searched size so every leg fills while net yield stays ≥ threshold. This IS the OPTIMAL SIZE.">Optimal trade size</div><div class="v">$${g.optimalSizeUsd.toFixed(0)} @ +${g.optimalNetYieldPercent.toFixed(2)}%</div></div>
+      <div class="kv"><div class="k" title="Optimal size × net yield at that exact size">Est. profit</div><div class="v">$${g.estimatedProfitUsd.toFixed(2)}</div><div class="h">Profit can never exceed size × net%. High yield + low profit = thin books, small fills.</div></div>
+      <div class="kv"><div class="k" title="Average slippage across all legs, measured per leg">Slippage @ size</div><div class="v">${g.slippagePercent.toFixed(4)}%</div></div>
+      <div class="kv"><div class="k" title="How long the gap was open and confirmed before emission">Gap age</div><div class="v">${fmtMs(g.gapAgeMs)}</div></div>
+      <div class="kv"><div class="k" title="Age of the order-book snapshot used. &gt;1s is rejected">Data freshness</div><div class="v">${g.stalenessMs}ms</div></div>
+      <div class="kv"><div class="k" title="Confidence HEURISTIC: 60% order-book liquidity grade + 40% consecutive ticks survived. It is NOT a measured win rate — a gap can still vanish before you could execute it. Real outcomes appear in History as Uptime and Realized net.">CONF %</div><div class="v">${Math.round(g.confidence)}%</div></div>
+      <div class="kv"><div class="k" title="Consecutive 100ms WebSocket updates the gap persisted on fresh books">Ticks survived</div><div class="v">${g.ticksSurvived} / ${Math.round(settings.requiredTicks || 3)}</div></div>
+      <div class="kv"><div class="k" title="What the gap would be with 0% maker (limit-order) fees">Maker-plan floor</div><div class="v">${g.makerPlanYieldPercent > 0 ? "+" + g.makerPlanYieldPercent.toFixed(3) + "%" : "n/a"}</div></div>
+      <div class="kv"><div class="k" title="Liquidity grade A–F of the top 5 depth levels averaged across all legs">Fill score</div><div class="v" style="color:${fillColor(g.fillScore)}">${g.fillScore}</div></div>
+    </div>
+    <div style="margin-top:12px;font-size:0.72rem;color:var(--secondary-text)">Detected at ${new Date(g.detectedAt).toLocaleString()}</div>
+    <div class="chart" id="chart-${g.id}"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row"></div></div>
+    <div style="margin-top:16px">
+      <div class="ct" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--secondary-text);margin-bottom:8px">Live prices — same WebSocket feed</div>
+      <div class="grid-4" style="grid-template-columns:${g.legs && g.legs.length >= 4 ? "1fr 1fr 1fr 1fr" : "1fr 1fr 1fr"}">
+        ${(g.legs || []).map((lg, i) => `<div class="leg-box"><div class="lt">Leg ${i + 1} · ${lg.symbol} · ${lg.direction}</div><div class="lp">entry ask: ${fmtPrice(lg.entryPrice)}<br>fill price: ${fmtPrice(lg.fillPrice)}<div class="sub">depth $${lg.weightedVolumeUsd.toFixed(0)} · slippage ${(lg.slippagePct || 0).toFixed(4)}%</div></div></div>`).join("")}
+      </div>
+    </div>
+  </td>`;
+  ref.after(tr);
+  // size curve chart
+  const chartEl = document.getElementById(`chart-${g.id}`);
+  const row = chartEl.querySelector(".chart-row");
+  let pts = [];
+  try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
+  if (pts.length) {
+    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
+    row.innerHTML = pts.map(p => {
+      const h = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
+      const ok = p.net_yield >= 0;
+      return `<div class="chart-bar" title="$${p.size_usd.toFixed(0)} → ${p.net_yield.toFixed(4)}%"><div class="bv">${(p.net_yield * 100).toFixed(3)}%</div><div style="height:${h}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">$${p.size_usd.toFixed(0)}</div></div>`;
+    }).join("");
+  } else {
+    row.innerHTML = '<div style="font-size:0.7rem;color:var(--secondary-text);align-self:center">Size curve: unavailable (books changed before sizing).</div>';
+  }
+}
+
+let liveDossierId = null;
+
+function enrichHistory(o) {
+  if (!o || !o.resolved) return;
+  const idx = history.findIndex(h => h.id === o.id);
+  if (idx < 0) return;
+  history[idx].uptimeMs = o.uptimeMs;
+  history[idx].lastNetYieldPercent = o.lastNetYieldPercent;
+  history[idx].gapClosedAt = o.gapClosedAt;
+  history[idx].resolved = true;
+  saveHistory();
+  renderHistory();
+  if (document.getElementById("panel-dossier").classList.contains("active") && liveDossierId === o.id) openDossier(o.id);
+}
+
+function openDossier(id) {
+  const h = history.find(x => x.id === id) || liveMap.get(id);
+  if (!h) { document.getElementById("dossierBody").innerHTML = '<div style="padding:40px;text-align:center;color:var(--secondary-text)">Trade not found.</div>'; return; }
+  liveDossierId = id;
+  document.getElementById("tab-btn-dossier").style.display = "";
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "dossier"));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-dossier"));
+  const g = { ...h };
+  const legs = (g.legs || []).map((lg, i) => `<div class="leg-box"><div class="lt">Leg ${i + 1} · ${lg.symbol} · ${lg.direction}</div><div class="lp">entry ask: ${fmtPrice(lg.entryPrice)}<br>fill price: ${fmtPrice(lg.fillPrice)}<div class="sub">depth $${(lg.weightedVolumeUsd || 0).toFixed(0)} · slippage ${(lg.slippagePct || 0).toFixed(4)}%</div></div></div>`).join("");
+  let pts = [];
+  try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
+  let chartHtml = '<div class="chart"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row"><div style="font-size:0.7rem;color:var(--secondary-text);align-self:center">Size curve: unavailable (books changed before sizing).</div></div></div>';
+  if (pts.length) {
+    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
+    chartHtml = `<div class="chart"><div class="ct">Yield vs size — slippage cost at each size (green = above threshold)</div><div class="chart-row">${pts.map(p => {
+      const hh = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
+      const ok = p.net_yield >= 0;
+      return `<div class="chart-bar" title="$${p.size_usd.toFixed(0)} → ${p.net_yield.toFixed(4)}%"><div class="bv">${(p.net_yield * 100).toFixed(3)}%</div><div style="height:${hh}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">$${p.size_usd.toFixed(0)}</div></div>`;
+    }).join("")}</div></div>`;
+  }
+  const up = g.uptimeMs ? fmtMs(g.uptimeMs) : (g.resolved ? "closed" : "still open");
+  const real = g.resolved && g.lastNetYieldPercent !== undefined ? ((g.lastNetYieldPercent >= 0 ? "+" : "") + g.lastNetYieldPercent.toFixed(3) + "%") : "—";
+  const realColor = g.resolved && g.lastNetYieldPercent !== undefined ? (g.lastNetYieldPercent >= 0 ? "var(--success)" : "var(--danger)") : "var(--secondary-text)";
+  const cols = legs.split("<div class=\"leg-box\">").length - 1;
+  const grid = cols === 3 ? "1fr 1fr 1fr" : "1fr 1fr 1fr 1fr";
+  document.getElementById("dossierBody").innerHTML = `
+    <div style="padding:14px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="stat">${g.shape || (g.nLegs === 4 ? "QUAD" : "TRI")} · ${g.path}</span>
+      <span class="stat" style="color:var(--success)">Net +${(g.netYieldPercent || 0).toFixed(3)}%</span>
+      <span class="stat">Uptime: ${up}</span>
+      <span class="stat" style="color:${realColor}">Realized: ${real}</span>
+      <span class="stat">Detected ${new Date(g.detectedAt).toLocaleString()}</span>
+    </div>
+    <div class="grid-4" style="padding:0 16px">
+      <div class="kv"><div class="k">Gross gap</div><div class="v">+${(g.grossGapPercent || 0).toFixed(4)}%</div></div>
+      <div class="kv"><div class="k">Fee cost (${g.nLegs || "N"} legs)</div><div class="v">${(g.feeCostPercent || 0).toFixed(3)}%</div></div>
+      <div class="kv"><div class="k">Net yield</div><div class="v" style="color:var(--success)">+${(g.netYieldPercent || 0).toFixed(3)}%</div></div>
+      <div class="kv hl"><div class="k">Optimal trade size</div><div class="v">$${(g.optimalSizeUsd || 0).toFixed(0)} @ +${(g.optimalNetYieldPercent || 0).toFixed(2)}%</div></div>
+      <div class="kv"><div class="k">Est. profit</div><div class="v">$${(g.estimatedProfitUsd || 0).toFixed(2)}</div><div class="h">Size × net% at optimal size.</div></div>
+      <div class="kv"><div class="k">Slippage @ size</div><div class="v">${(g.slippagePercent || 0).toFixed(4)}%</div></div>
+      <div class="kv"><div class="k">Pre-emission gap age</div><div class="v">${fmtMs(g.gapAgeMs || 0)}</div></div>
+      <div class="kv"><div class="k">Data freshness</div><div class="v">${g.stalenessMs || 0}ms</div></div>
+      <div class="kv"><div class="k" title="Confidence HEURISTIC: 60% liquidity grade + 40% ticks survived. NOT a measured win rate.">CONF %</div><div class="v">${Math.round(g.confidence || 0)}%</div></div>
+      <div class="kv"><div class="k">Ticks survived</div><div class="v">${g.ticksSurvived} / ${Math.round(settings.requiredTicks || 3)}</div></div>
+      <div class="kv"><div class="k">Maker-plan floor</div><div class="v">${g.makerPlanYieldPercent > 0 ? "+" + g.makerPlanYieldPercent.toFixed(3) + "%" : "n/a"}</div></div>
+      <div class="kv"><div class="k">Fill score</div><div class="v" style="color:${fillColor(g.fillScore || "F")}">${g.fillScore || "—"}</div></div>
+    </div>
+    <div style="margin-top:16px">${chartHtml}</div>
+    <div style="margin-top:18px;padding:0 16px 16px">
+      <div class="ct" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--secondary-text);margin-bottom:8px">Order-book snapshot at detection — same WebSocket feed</div>
+      <div class="grid-4" style="grid-template-columns:${grid}">${legs}</div>
+    </div>
+    <div class="footer">All figures are the book snapshot at detection time. “Realized” = the net yield still measured when the gap closed (post-emission live re-validation). Live prices on the Live Pulse page update every 100ms.</div>`;
+}
+
+function onOpportunity(g) {
+  if (g && g.resolved) { enrichHistory(g); return; }
+  freshId = g.id; freshAt = Date.now();
+  // compress path for the table: USDT → A → B [→ C] → USDT when stables match USDT
+  const m = g.path.match(/USDT → ((\w+) → ?)+USDT/);
+  const pm = g.path.match(/^(\w+) → (.*?) → (\w+)$/);
+  g.shortPath = (pm && pm[1] === "USDT" && pm[3] === "USDT") ? `USDT → ${pm[2]} → USDT` : g.path;
+  liveMap.set(g.id, g);
+  if (liveMap.size > 400) { const old = [...liveMap.keys()][0]; liveMap.delete(old); }
+  renderLive();
+  // history
+  history.unshift({ ...g, detectedAt: new Date(g.detectedAt).toISOString() });
+  if (history.length > 2000) history.length = 2000;
+  saveHistory();
+  renderHistory();
+}
+
+function onStats(s) {
+  document.getElementById("stBooks").textContent = s.books;
+  document.getElementById("stLoops").textContent = s.loops;
+  if (s.measuring) setConnBadge("seeding");
+  else if (s.books > 0) setConnBadge("live");
+  renderCoins(s);
+  document.getElementById("stPending").style.display = s.pending > 0 ? "" : "none";
+  document.getElementById("stPending").textContent = `● ${s.pending} pending`;
+  if (s.bestGrossYieldPct !== null && s.bestGapPath)
+    document.getElementById("stBest").textContent = `+${s.bestGrossYieldPct.toFixed(4)}% via ${s.bestGapPath}`;
+}
+
+let coinsSnapshot = [];
+function renderCoins(s) {
+  coinsSnapshot = s.coins || coinsSnapshot;
+  const testUsd = s.liquidityTestUsd || 100;
+  const maxSlip = s.maxSlipPct || 0.1;
+  document.getElementById("coinsCount").textContent = `(${coinsSnapshot.length})`;
+  document.getElementById("coinsInfo").textContent = coinsSnapshot.length > 0
+    ? `${coinsSnapshot.length} coins currently in use`
+    : "Building the live coin universe — this takes under a minute on first start…";
+  document.getElementById("coinsCrit").textContent = `criterion: $${testUsd} fills both sides ≤ ${maxSlip.toFixed(3)}% slip`;
+  const tbody = document.getElementById("coinsRows");
+  if (coinsSnapshot.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Seeding… the tradability list appears once the live books are measured.</td></tr>'; return; }
+  const rows = [...coinsSnapshot].sort((a, b) => b.depthUsd - a.depthUsd).map((c, i) =>
+    `<tr><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">$${Math.round(c.vol24h || 0).toLocaleString()}</td><td class="r">$${Math.round(c.depthUsd || 0).toLocaleString()}</td>` +
+    `<td class="r">${c.buySlipPct !== null ? c.buySlipPct.toFixed(4) + "%" : "no fill"}</td><td class="r">${c.sellSlipPct !== null ? c.sellSlipPct.toFixed(4) + "%" : "no fill"}</td>` +
+    `<td class="c" style="color:${c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip ? "var(--positive)" : "var(--warning)"}">${c.buySlipPct !== null && c.sellSlipPct !== null ? "YES" : "no"}</td></tr>`
+  ).join("");
+  tbody.innerHTML = rows;
+}
+
+function setConnBadge(state) {
+  const el = document.getElementById("stConn");
+  el.className = "badge " + (state === "live" ? "live" : state === "seeding" ? "pending" : "off");
+  el.textContent = state === "live" ? "● LIVE" : state === "seeding" ? "● SEEDING BOOKS" : "● RECONNECTING";
+}
+
+function saveHistory() {
+  try { localStorage.setItem("gh_hist", JSON.stringify(history.slice(0, 2000))); }
+  catch { history.length = 1500; try { localStorage.setItem("gh_hist", JSON.stringify(history)); } catch {} }
+}
+function renderHistory() {
+  document.getElementById("histCount").textContent = history.length ? `(${history.length})` : "";
+  document.getElementById("histInfo").textContent = `${history.length} opportunities saved (browser storage, up to 2,000)`;
+  const tbody = document.getElementById("histRows");
+  if (history.length === 0) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No history yet. Found opportunities appear here as they are verified.</td></tr>'; return; }
+  tbody.innerHTML = history.slice(0, 500).map(h => {
+    const pm = h.path.match(/^(\w+) → (.*?) → (\w+)$/);
+    const sp = (pm && pm[1] === "USDT" && pm[3] === "USDT") ? `USDT → ${pm[2]} → USDT` : h.path;
+    const up = h.uptimeMs ? fmtMs(h.uptimeMs) : "—";
+    const real = h.resolved ? (h.lastNetYieldPercent !== undefined ? ((h.lastNetYieldPercent >= 0 ? "+" : "") + h.lastNetYieldPercent.toFixed(3) + "%") : "closed") : "open";
+    return `<tr class="hist-row" style="cursor:pointer" data-id="${h.id}"><td>${new Date(h.detectedAt).toLocaleString()}</td><td>${h.shape ? `<span style="font-size:0.6rem;color:${h.shape === "QUAD" ? "var(--warning)" : "var(--secondary-text)"};border:1px solid ${h.shape === "QUAD" ? "var(--warning)" : "var(--accent-border)"};border-radius:6px;padding:1px 6px;margin-right:6px">${h.shape}</span>` : ""}${sp}</td><td class="r">+${h.netYieldPercent.toFixed(3)}%</td><td class="r">$${h.estimatedProfitUsd.toFixed(2)}</td><td class="r">$${h.optimalSizeUsd.toFixed(0)}</td><td class="c">${h.ticksSurvived}</td><td class="c">${Math.round(h.confidence)}%</td><td class="r">${up}</td><td class="r" style="color:${h.lastNetYieldPercent >= 0 ? "var(--success)" : "var(--danger)"}">${real}</td></tr>`;
+  }).join("");
+  tbody.querySelectorAll("tr.hist-row").forEach(tr => tr.onclick = () => { openDossier(tr.dataset.id); });
+}
+renderHistory();
+
+document.getElementById("btnExport").onclick = () => {
+  const maxLegs = Math.max(3, ...history.map(h => (h.legs || []).length));
+  const head = ["detected_at", "path", "shape", "net_yield_pct", "gross_gap_pct", "fee_cost_pct", "slippage_pct", "estimated_profit_usd", "optimal_size_usd", "optimal_net_yield_pct", "ticks_survived", "fill_score", "confidence_pct", "maker_plan_yield_pct", "uptime_ms", "realized_net_pct", "gap_closed_at", ...Array.from({ length: maxLegs }, (_, i) => ["leg" + (i + 1) + "_symbol", "leg" + (i + 1) + "_entry", "leg" + (i + 1) + "_fill", "leg" + (i + 1) + "_slippage_pct"]).flat()];
+  const rows = history.map(h => {
+    const legs = h.legs || [];
+    const base = [h.detectedAt, h.path, h.shape || "TRI", h.netYieldPercent, h.grossGapPercent, h.feeCostPercent, h.slippagePercent, h.estimatedProfitUsd, h.optimalSizeUsd, h.optimalNetYieldPercent, h.ticksSurvived, h.fillScore, h.confidence, h.makerPlanYieldPercent, h.uptimeMs || "", h.lastNetYieldPercent !== undefined ? h.lastNetYieldPercent : "", h.gapClosedAt || ""];
+    const legCols = Array.from({ length: maxLegs }, (_, i) => {
+      const lg = legs[i] || {};
+      return [lg.symbol ?? "", lg.entryPrice ?? "", lg.fillPrice ?? "", lg.slippagePct ?? ""];
+    }).flat();
+    return base.concat(legCols).map(k => JSON.stringify(k ?? "")).join(",");
+  });
+  const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `mexc-ghost-hunter-history-${Date.now()}.csv`;
+  a.click();
+};
+document.getElementById("btnClearHist").onclick = () => { history.length = 0; saveHistory(); renderHistory(); };
+
+async function restart() {
+  setConnBadge("seeding");
+  if (scanner) scanner.stop();
+  liveMap.clear();
+  renderLive();
+  scanner = new Scanner(settings, onOpportunity, onStats);
+  await scanner.start();
+}
+
+document.getElementById("btnRestart").onclick = restart;
+restart();
+</script>
+</body>
+</html>
