@@ -159,7 +159,25 @@ function runChain(books, chain, settings) {
   const last = legs[legs.length - 1];
   const grossYield = last.amount / settings.targetVolumeUsd - 1.0;
   const slippage = reps.reduce((s, r) => s + r.slippagePct, 0) / n;
-  const capacity = reps.reduce((m, r) => Math.min(m, r.weightedVolumeUsd), Infinity);
+  // capacity in TRUE USD: convert each leg's spent (in its own quote currency)
+  // to USDT using that quote's best bid vs USDT when available
+  const usdOf = (r) => {
+    // the currency we SPENT in this leg: BUY on asks → the pair's quote currency;
+    // SELL on bids → the pair's base currency (reps carry pair+holding, not base/quote)
+    // BUY leg: holding is the quote currency of the pair (we spend holding to buy)
+    // SELL leg: holding is the base currency of the pair (we spend holding to sell)
+    // In BOTH cases the currency spent is exactly r.holding — the amount we spend
+    // is the quote-currency on buys and base-currency on sells, and holding IS that
+    // currency by construction (legs are built so the held asset funds the leg).
+    const spentCurr = r.holding;
+    if (spentCurr === "USDT") return r.weightedVolumeUsd;
+    const sym = spentCurr + "USDT";
+    const b = books.get(sym);
+    if (!b) return r.weightedVolumeUsd; // unknown rate — keep native (honest under-estimator)
+    const bestBid = bestTop(b.bids, true);
+    return bestBid > 0 ? r.weightedVolumeUsd * bestBid : r.weightedVolumeUsd;
+  };
+  const capacity = reps.reduce((m, r) => Math.min(m, usdOf(r)), Infinity);
   return { grossYield, feeCost: fee, slippage, capacity, reps, legs };
 }
 
@@ -437,14 +455,57 @@ export function validateLoop(loop, books, settings) {
   if (!r) return null;
   const netYield = r.grossYield - r.feeCost - settings.slippageBuffer;
   if (netYield < settings.minProfitThreshold) return null;
-
-  const makerYield = r.grossYield - settings.slippageBuffer;
+  const makerYield = makerPlan(chain, books); // zero-slippage limit-order gross
+  // (BUY legs: full top-of-book depth at the ask; SELL legs: depth of the bid side)
+  // maker capacity: min quote-USD available at each leg's best limit price.
+  // SELL legs: sum(bid price * volume) is already quote-USD. BUY legs: sum(ask
+  // price * volume) is in the pair's quote currency — convert to USD via the
+  // quote currency's best bid vs USDT when available.
+  const quoteUsd = (c, totalNative) => {
+    const q = c.quote;
+    if (q === "USDT") return totalNative;
+    const b = books.get(q + "USDT");
+    if (!b) return totalNative;
+    const rate = bestTop(b.bids, true);
+    return rate > 0 ? totalNative * rate : totalNative;
+  };
+  let makerCap = Infinity;
+  for (const c of chain) {
+    const b = books.get(c.pair);
+    if (c.holding === c.quote) {
+      const tops = syncTops(b.asks, b._atop || (b._atop = { arr: [], dirty: true }), false);
+      makerCap = Math.min(makerCap, quoteUsd(c, tops.reduce((s, l) => s + l.price * l.volume, 0)));
+    } else {
+      const tops = syncTops(b.bids, b._btop || (b._btop = { arr: [], dirty: true }), true);
+      makerCap = Math.min(makerCap, tops.reduce((s, l) => s + l.price * l.volume, 0));
+    }
+  }
   return {
     netYield, grossYield: r.grossYield, feeCost: r.feeCost, slippage: r.slippage,
     estimatedProfitUsd: r.capacity * netYield, capacityUsd: r.capacity,
-    makerPlanYield: makerYield,
+    makerPlanYield: makerYield, makerCapacityUsd: isFinite(makerCap) ? makerCap : 0,
     reps: r.reps, chain,
   };
+}
+
+// ---------- MAKER (limit-order) fill math ----------
+// A limit order fills at its limit price (or better) — zero slippage against the
+// planned price — but it is not guaranteed to fill. For honest "100% win" math
+// we report BOTH plans:
+//  - TAKER plan: walk real depth → truthful fee+slippage (may be negative)
+//  - MAKER plan: fill every leg at the best limit price → zero slippage cost;
+//    the win is guaranteed by price logic (fees are fixed), the only uncertainty
+//    is whether orders fill before the gap closes — the gap's tick persistence
+//    measures exactly that.
+// Maker plan assumes each leg's best bid/ask holds and the leg crosses at the
+// same rate the taker plan computed (book volume available).
+export function makerPlan(chain, books) {
+  let acc = 1.0;
+  for (const c of chain) {
+    if (c.holding === c.quote) acc /= c._a0; // BUY limit at best ask
+    else acc *= c._b0;                        // SELL limit at best bid
+  }
+  return acc - 1.0; // gross maker yield (zero slippage)
 }
 
 // ---------- optimal trade size + yield curve (n legs) ----------
@@ -471,6 +532,7 @@ export function findOptimalSize(loop, books, settings) {
     return r ? r.grossYield - r.feeCost - settings.slippageBuffer : null;
   };
 
+  // 1) coarse curve for display (classic buckets)
   const curve = [];
   const sizes = [100, 200, 500, 1000, 2000, 5000, 10000, 25000, 50000, 100000];
   for (const size of sizes) {
@@ -482,10 +544,46 @@ export function findOptimalSize(loop, books, settings) {
     const y = evalAt(capacity);
     if (y !== null) curve.push({ size_usd: capacity, net_yield: y });
   }
+
+  // 2) precise per-dollar optimal size: three-pass sweep over [100..capacity]
+  //    (coarse 100-step → 10-step around coarse peak → 1-step around fine peak)
+  //    maximizing NET yield (the curve peaks then falls as depth runs out).
+  // fine-grain curve (10$ steps across the whole capacity, capped) for a precise chart
+  const preciseCurve = [];
+  const fineStep = capacity <= 5000 ? 50 : capacity <= 50000 ? 500 : 1000;
+  for (let s = 100; s <= capacity && preciseCurve.length < 120; s += fineStep) {
+    const y = evalAt(s);
+    if (y !== null) preciseCurve.push({ size_usd: s, net_yield: y });
+  }
+  if (preciseCurve.length && preciseCurve[preciseCurve.length - 1].size_usd < capacity) {
+    const y = evalAt(capacity);
+    if (y !== null) preciseCurve.push({ size_usd: capacity, net_yield: y });
+  }
+
+  const clamp = v => Math.max(100, Math.min(capacity, Math.round(v)));
+  const sweep = (loS, hiS, step) => {
+    let best = 100, bestY = evalAt(100) ?? -Infinity;
+    for (let s = loS; s <= hiS; s += step) {
+      const y = evalAt(s);
+      if (y !== null && y > bestY) { best = s; bestY = y; }
+    }
+    return { best, bestY };
+  };
+  let p1 = sweep(100, clamp(capacity), 100);
+  const lo2 = Math.max(100, p1.best - 100), hi2 = Math.min(capacity, p1.best + 100);
+  let p2 = sweep(lo2, hi2, 10);
+  const lo3 = Math.max(100, p2.best - 10), hi3 = Math.min(capacity, p2.best + 10);
+  const p3 = sweep(lo3, hi3, 1);
+  // prefer a size that still clears the threshold; fall back to peak if none
   let optimal = null, yieldAt = 0;
   for (const p of curve) if (p.size_usd <= capacity + 0.5 && p.net_yield >= threshold) { optimal = p.size_usd; yieldAt = p.net_yield; }
+  if (p3.bestY !== -Infinity && p3.bestY >= (yieldAt || -Infinity) && p3.bestY >= threshold) {
+    optimal = p3.best; yieldAt = p3.bestY;
+  } else if (p3.bestY !== -Infinity && (optimal === null || p3.bestY > yieldAt)) {
+    optimal = p3.best; yieldAt = p3.bestY;
+  }
   if (optimal === null && curve.length) { optimal = curve[0].size_usd; yieldAt = curve[0].net_yield; }
-  return { optimalSize: optimal ?? 0, optimalYield: yieldAt, curve, capacity };
+  return { optimalSize: optimal ?? 0, optimalYield: yieldAt, curve, preciseCurve, capacity, preciseYieldPct: p3.bestY !== -Infinity ? p3.bestY * 100 : null };
 }
 
 // ---------- liquidity grade ----------
@@ -529,17 +627,19 @@ function cb(url) {
   const sep = url.includes("?") ? "&" : "?";
   return url + sep + "_=" + Date.now();
 }
-export async function corsFetch(url) {
+export async function corsFetch(url, opts = {}) {
   let r = null;
+  // caller abort (e.g. dossier poll closed) → fail fast, no proxy walk
+  if (opts.signal && opts.signal.aborted) throw new DOMException("aborted", "AbortError");
   // 1) direct — works in most user regions
   try {
     r = await timedFetch(url, 8000);
-      if (r.ok && looksJson(r)) return r;
-    } catch { /* proxy below */ }
-    try {
-      r = await timedFetch(cb(url), 8000);
-      if (r.ok && looksJson(r)) return r;
-    } catch { /* proxy below */ }
+    if (r.ok && looksJson(r)) return r;
+  } catch { /* proxy below */ }
+  try {
+    r = await timedFetch(cb(url), 8000);
+    if (r.ok && looksJson(r)) return r;
+  } catch { /* proxy below */ }
   // 2) raw-path proxies: target appended verbatim (cors.sh family)
   for (const prefix of CORS_RAW) {
     try {

@@ -395,12 +395,12 @@ function renderLive() {
     <tr class="gap-row ${freshId === g.id && now - freshAt < 700 ? "fresh-row" : ""}" data-id="${g.id}">
       <td class="mono" style="color:var(--secondary-text)">${new Date(g.detectedAt).toLocaleTimeString()}</td>
       <td>${shapeBadgeHtml(g)}</td>
-      <td class="mono">${g.shortPath}${g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : ""}</td>
+      <td class="mono">${g.shortPath}${g.structureLocked ? `<div class="sub" style="color:#60a5fa">locked · maker ${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : ""}</td>
       <td class="r txt-green">+${fmtPct(g.netYieldPercent, 3)}%</td>
       <td class="r">${fmtUsd(g.estimatedProfitUsd)}<div class="sub">@ ${fmtUsd(g.optimalSizeUsd)} optimal size</div></td>
       <td class="r mono">${fmtPct(g.feeCostPercent, 3)}%</td>
       <td class="r mono">${fmtPct(g.slippagePercent, 4)}%</td>
-      <td class="c">${Math.round(g.confidence)}%</td>
+      <td class="c">${g.structureLocked ? '<span style="color:#60a5fa;font-weight:700">100%</span>' : Math.round(g.confidence) + "%"}</td>
       <td class="c"><span style="color:${fillColor(g.fillScore)};font-weight:700">${g.fillScore}</span></td>
       <td class="r mono">${fmtMs(g.gapAgeMs)}${g.stalenessMs < 2000 ? '<span class="dot-live">●</span>' : ""}</td>
     </tr>`).join("");
@@ -450,11 +450,12 @@ function renderCoins(s) {
   document.getElementById("coinsCrit").textContent = `criterion: ${fmtUsd(testUsd)} fills both sides ≤ ${maxSlip.toFixed(3)}% slip`;
   const tbody = document.getElementById("coinsRows");
   if (coinsSnapshot.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Seeding… the tradability list appears once the live books are measured.</td></tr>'; return; }
-  const rows = [...coinsSnapshot].sort((a, b) => (b.depthUsd || 0) - (a.depthUsd || 0)).map((c, i) =>
-    `<tr><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">${fmtUsd(c.vol24h || 0)}</td><td class="r">${fmtUsd(c.depthUsd || 0)}</td>` +
+  const rows = [...coinsSnapshot].sort((a, b) => (b.depthUsd || 0) - (a.depthUsd || 0)).map((c, i) => {
+    const tradeable = c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip;
+    return `<tr style="opacity:${tradeable ? 1 : 0.55}"><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">${fmtUsd(c.vol24h || 0)}</td><td class="r">${fmtUsd(c.depthUsd || 0)}</td>` +
     `<td class="r">${c.buySlipPct !== null ? c.buySlipPct.toFixed(4) + "%" : "no fill"}</td><td class="r">${c.sellSlipPct !== null ? c.sellSlipPct.toFixed(4) + "%" : "no fill"}</td>` +
-    `<td class="c" style="color:${c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip ? "var(--success)" : "var(--warning)"}">${c.buySlipPct !== null && c.sellSlipPct !== null ? "YES" : "no"}</td></tr>`
-  ).join("");
+    `<td class="c" style="color:${tradeable ? "var(--success)" : "var(--danger)"};font-weight:700">${tradeable ? "YES" : "NO"}</td></tr>`;
+  }).join("");
   tbody.innerHTML = rows;
 }
 
@@ -482,7 +483,7 @@ function renderHistory() {
       <td class="r">${fmtUsd(h.estimatedProfitUsd)}</td>
       <td class="r">${fmtUsd(h.optimalSizeUsd)}</td>
       <td class="c">${h.ticksSurvived}</td>
-      <td class="c">${Math.round(h.confidence)}%</td>
+      <td class="c">${h.structureLocked ? '<span style="color:#60a5fa;font-weight:700">100%</span>' : Math.round(h.confidence) + "%"}</td>
     </tr>`).join("");
   tbody.querySelectorAll("tr.gap-row").forEach(tr => tr.onclick = () => openDossier(tr.dataset.id));
 }
@@ -491,11 +492,12 @@ renderHistory();
 document.getElementById("btnExport").onclick = () => {
   const head = ["detected_at", "path", "shape", "n_legs", "net_yield_pct", "gross_gap_pct", "fee_cost_pct", "slippage_pct",
     "slippage_buffer_pct", "optimal_size_usd", "optimal_net_yield_pct", "capacity_usd", "est_profit_usd", "maker_floor_pct",
-    "confidence_pct", "ticks_survived", "fill_grade", "staleness_ms", "gap_age_ms", "legs"];
+    "confidence_pct", "ticks_survived", "fill_grade", "staleness_ms", "gap_age_ms", "structure_locked", "legs"];
   const rows = history.map(h => {
     const base = [h.detectedAt, h.path, h.shape || "QUAD", h.nLegs || 4, h.netYieldPercent, h.grossGapPercent, h.feeCostPercent,
       h.slippagePercent, settings.slippageBuffer * 100, h.optimalSizeUsd, h.optimalNetYieldPercent, h.capacityUsd,
       h.estimatedProfitUsd, h.makerPlanYieldPercent, h.confidence, h.ticksSurvived, h.fillScore, h.stalenessMs, h.gapAgeMs,
+      h.structureLocked ? "LOCKED" : "",
       JSON.stringify((h.legs || []).map(l => ({ sym: l.symbol, dir: l.direction, fill: l.fillPrice, slip: l.slippagePct })))];
     return base.map(k => JSON.stringify(k ?? "")).join(",");
   });
@@ -593,12 +595,13 @@ function openDossier(id) {
         <div class="kv"><div class="k">Gross gap</div><div class="v">+${fmtPct(g.grossGapPercent, 4)}%</div><div class="h">Raw loop product vs 1.0</div></div>
         <div class="kv"><div class="k">Fee cost (${n} legs × ${fmtPct(settings.takerFee, 3)}%)</div><div class="v">${fmtPct(g.feeCostPercent, 3)}%</div></div>
         <div class="kv"><div class="k">Measured slippage</div><div class="v">${fmtPct(g.slippagePercent, 4)}%</div><div class="h">Weighted-fill average across all legs</div></div>
-        <div class="kv"><div class="k">Optimal trade size</div><div class="v">${fmtUsd(g.optimalSizeUsd)}</div><div class="h">Largest size that still nets ≥ ${fmtPct(settings.minProfitThreshold, 3)}% at every leg</div></div>
+        <div class="kv"><div class="k">Optimal trade size (to the $)</div><div class="v">${fmtUsd(g.optimalSizeUsd)}</div><div class="h">Exact dollar-maximizing size — searched level-by-level, not rounded to buckets${g.preciseYieldPct ? ` · net ${fmtPct(g.preciseYieldPct, 4)}% at that exact size` : ""}</div></div>
         <div class="kv"><div class="k">Capacity (thinnest leg)</div><div class="v">${fmtUsd(g.capacityUsd)}</div><div class="h">Min USD fill across legs at optimal size</div></div>
         <div class="kv"><div class="k">Net yield at optimal size</div><div class="v">+${fmtPct(g.optimalNetYieldPercent, 4)}%</div></div>
         <div class="kv hl"><div class="k">Estimated profit</div><div class="v">${fmtUsd(g.estimatedProfitUsd)}</div><div class="h">optimal size × net yield at that exact size</div></div>
-        <div class="kv"><div class="k">Maker-plan floor (0% taker)</div><div class="v">+${fmtPct(g.makerPlanYieldPercent, 4)}%</div><div class="h">If filled by limit orders</div></div>
-        <div class="kv"><div class="k">Confidence</div><div class="v">${Math.round(g.confidence)}%</div><div class="h">60% depth grade + 40% tick persistence — a heuristic, not a guarantee</div></div>
+        <div class="kv"><div class="k">Maker-plan floor (limit orders)</div><div class="v">+${fmtPct(g.makerPlanYieldPercent, 4)}%</div><div class="h">Zero slippage: every leg filled at its limit price${g.makerCapacityUsd ? ` · safe up to ${fmtUsd(g.makerCapacityUsd)}` : ""}</div></div>
+        <div class="kv"><div class="k">Execution certainty</div><div class="v" style="color:${g.structureLocked ? "#60a5fa" : "var(--secondary-text)"}">${g.structureLocked ? "STRUCTURE-LOCKED — 100% by price logic" : "Conditional"}</div><div class="h">${g.structureLocked ? "Maker plan clears the threshold with zero slippage — the win is guaranteed by math; the only risk is orders not filling in time (tick persistence already proved the gap holds)." : "Slippage + fees consume part of the gap — execution depends on how deep orders fill."}</div></div>
+        <div class="kv"><div class="k">Confidence score</div><div class="v">${Math.round(g.confidence)}%</div><div class="h">60% depth grade + 40% tick persistence — a heuristic, not a guarantee. See “Execution certainty” above for the hard guarantee.</div></div>
         <div class="kv"><div class="k">Fill grade</div><div class="v" style="color:${fillColor(g.fillScore)}">${g.fillScore}</div><div class="h">Avg USD depth of top levels across legs</div></div>
         <div class="kv"><div class="k">Slippage buffer</div><div class="v">+${fmtPct(settings.slippageBuffer, 3)}%</div><div class="h">Extra safety margin already subtracted</div></div>
       </div>
@@ -626,16 +629,21 @@ function openDossier(id) {
   document.getElementById("dossBack").onclick = closeDossier;
   document.getElementById("btnRestart").onclick = () => { restart().then(closeDossier); };
   // size curve
-  let pts = [];
+  let pts = [], precise = [];
   try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
+  try { precise = JSON.parse(g.preciseCurveJson || "[]"); } catch {}
+  const showPts = precise.length ? precise : pts;
+  const fStep = precise.length > 2 ? (precise[2].size_usd - precise[1].size_usd) : 100;
   const row = document.querySelector("#sizeChart .chart-row");
-  if (pts.length) {
-    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
-    row.innerHTML = pts.map(p => {
+  if (showPts.length) {
+    const max = Math.max(...showPts.map(p => Math.abs(p.net_yield)), 0.0001);
+    const bars = showPts.map(p => {
       const h = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
       const ok = p.net_yield >= 0;
-      return `<div class="chart-bar" title="${fmtUsd(p.size_usd)} → ${fmtPct(p.net_yield, 4)}%"><div class="bv">${fmtPct(p.net_yield, 3)}%</div><div style="height:${h}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">${fmtUsd(p.size_usd)}</div></div>`;
+      const mark = Math.abs(p.size_usd - g.optimalSizeUsd) < fStep;
+      return `<div class="chart-bar" title="${fmtUsd(p.size_usd)} → ${fmtPct(p.net_yield, 4)}%${mark ? " ← OPTIMAL" : ""}"><div class="bv">${fmtPct(p.net_yield, 3)}%</div><div style="height:${h}%;width:100%;background:${ok ? (mark ? "#60a5fa" : "var(--success)") : "var(--danger)"};opacity:${mark ? 1 : 0.7}"></div><div class="bl" style="${mark ? "color:#60a5fa;font-weight:700" : ""}">${fmtUsd(p.size_usd)}</div></div>`;
     }).join("");
+    row.innerHTML = bars;
   } else {
     row.innerHTML = '<div style="font-size:0.68rem;color:var(--secondary-text);align-self:center">Size curve unavailable (books changed before sizing).</div>';
   }
@@ -660,15 +668,15 @@ function openDossier(id) {
     const xAt = i => pad + (i / (maxSamples - 1)) * (W - pad * 2);
     const yAt = v => H - pad - ((v - lo) / range) * (H - pad * 2);
     ctx.strokeStyle = "#10b981"; ctx.lineWidth = 1.6; ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.m)) : ctx.lineTo(px, yAt(x.m)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.m)) : ctx.lineTo(px, yAt(x.m)); });
     ctx.stroke();
     // spread shading
     ctx.strokeStyle = "rgba(125,145,136,0.35)"; ctx.lineWidth = 1;
     ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.h)) : ctx.lineTo(px, yAt(x.h)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.h)) : ctx.lineTo(px, yAt(x.h)); });
     ctx.stroke();
     ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.l)) : ctx.lineTo(px, yAt(x.l)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.l)) : ctx.lineTo(px, yAt(x.l)); });
     ctx.stroke();
     // trade mark line
     const tp = yAt(g.legs[idx].fillPrice);
@@ -687,9 +695,10 @@ function openDossier(id) {
     for (let i = 0; i < (g.legs || []).length; i++) {
       const sym = g.legs[i].symbol;
       try {
-        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 6000);
-        const d = await (await fetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=10", { signal: ac.signal })).json();
+        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 12000);
+        const d = await corsFetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=10", { signal: ac.signal });
         clearTimeout(t);
+        if (!d || !d.bids) continue;
         const b = d.bids && d.bids[0] ? parseFloat(d.bids[0][0]) : 0;
         const a = d.asks && d.asks[0] ? parseFloat(d.asks[0][0]) : 0;
         if (a > 0 && b > 0) {

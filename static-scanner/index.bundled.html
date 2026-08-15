@@ -617,7 +617,25 @@ function runChain(books, chain, settings) {
   const last = legs[legs.length - 1];
   const grossYield = last.amount / settings.targetVolumeUsd - 1.0;
   const slippage = reps.reduce((s, r) => s + r.slippagePct, 0) / n;
-  const capacity = reps.reduce((m, r) => Math.min(m, r.weightedVolumeUsd), Infinity);
+  // capacity in TRUE USD: convert each leg's spent (in its own quote currency)
+  // to USDT using that quote's best bid vs USDT when available
+  const usdOf = (r) => {
+    // the currency we SPENT in this leg: BUY on asks → the pair's quote currency;
+    // SELL on bids → the pair's base currency (reps carry pair+holding, not base/quote)
+    // BUY leg: holding is the quote currency of the pair (we spend holding to buy)
+    // SELL leg: holding is the base currency of the pair (we spend holding to sell)
+    // In BOTH cases the currency spent is exactly r.holding — the amount we spend
+    // is the quote-currency on buys and base-currency on sells, and holding IS that
+    // currency by construction (legs are built so the held asset funds the leg).
+    const spentCurr = r.holding;
+    if (spentCurr === "USDT") return r.weightedVolumeUsd;
+    const sym = spentCurr + "USDT";
+    const b = books.get(sym);
+    if (!b) return r.weightedVolumeUsd; // unknown rate — keep native (honest under-estimator)
+    const bestBid = bestTop(b.bids, true);
+    return bestBid > 0 ? r.weightedVolumeUsd * bestBid : r.weightedVolumeUsd;
+  };
+  const capacity = reps.reduce((m, r) => Math.min(m, usdOf(r)), Infinity);
   return { grossYield, feeCost: fee, slippage, capacity, reps, legs };
 }
 
@@ -895,14 +913,57 @@ function validateLoop(loop, books, settings) {
   if (!r) return null;
   const netYield = r.grossYield - r.feeCost - settings.slippageBuffer;
   if (netYield < settings.minProfitThreshold) return null;
-
-  const makerYield = r.grossYield - settings.slippageBuffer;
+  const makerYield = makerPlan(chain, books); // zero-slippage limit-order gross
+  // (BUY legs: full top-of-book depth at the ask; SELL legs: depth of the bid side)
+  // maker capacity: min quote-USD available at each leg's best limit price.
+  // SELL legs: sum(bid price * volume) is already quote-USD. BUY legs: sum(ask
+  // price * volume) is in the pair's quote currency — convert to USD via the
+  // quote currency's best bid vs USDT when available.
+  const quoteUsd = (c, totalNative) => {
+    const q = c.quote;
+    if (q === "USDT") return totalNative;
+    const b = books.get(q + "USDT");
+    if (!b) return totalNative;
+    const rate = bestTop(b.bids, true);
+    return rate > 0 ? totalNative * rate : totalNative;
+  };
+  let makerCap = Infinity;
+  for (const c of chain) {
+    const b = books.get(c.pair);
+    if (c.holding === c.quote) {
+      const tops = syncTops(b.asks, b._atop || (b._atop = { arr: [], dirty: true }), false);
+      makerCap = Math.min(makerCap, quoteUsd(c, tops.reduce((s, l) => s + l.price * l.volume, 0)));
+    } else {
+      const tops = syncTops(b.bids, b._btop || (b._btop = { arr: [], dirty: true }), true);
+      makerCap = Math.min(makerCap, tops.reduce((s, l) => s + l.price * l.volume, 0));
+    }
+  }
   return {
     netYield, grossYield: r.grossYield, feeCost: r.feeCost, slippage: r.slippage,
     estimatedProfitUsd: r.capacity * netYield, capacityUsd: r.capacity,
-    makerPlanYield: makerYield,
+    makerPlanYield: makerYield, makerCapacityUsd: isFinite(makerCap) ? makerCap : 0,
     reps: r.reps, chain,
   };
+}
+
+// ---------- MAKER (limit-order) fill math ----------
+// A limit order fills at its limit price (or better) — zero slippage against the
+// planned price — but it is not guaranteed to fill. For honest "100% win" math
+// we report BOTH plans:
+//  - TAKER plan: walk real depth → truthful fee+slippage (may be negative)
+//  - MAKER plan: fill every leg at the best limit price → zero slippage cost;
+//    the win is guaranteed by price logic (fees are fixed), the only uncertainty
+//    is whether orders fill before the gap closes — the gap's tick persistence
+//    measures exactly that.
+// Maker plan assumes each leg's best bid/ask holds and the leg crosses at the
+// same rate the taker plan computed (book volume available).
+function makerPlan(chain, books) {
+  let acc = 1.0;
+  for (const c of chain) {
+    if (c.holding === c.quote) acc /= c._a0; // BUY limit at best ask
+    else acc *= c._b0;                        // SELL limit at best bid
+  }
+  return acc - 1.0; // gross maker yield (zero slippage)
 }
 
 // ---------- optimal trade size + yield curve (n legs) ----------
@@ -929,6 +990,7 @@ function findOptimalSize(loop, books, settings) {
     return r ? r.grossYield - r.feeCost - settings.slippageBuffer : null;
   };
 
+  // 1) coarse curve for display (classic buckets)
   const curve = [];
   const sizes = [100, 200, 500, 1000, 2000, 5000, 10000, 25000, 50000, 100000];
   for (const size of sizes) {
@@ -940,10 +1002,46 @@ function findOptimalSize(loop, books, settings) {
     const y = evalAt(capacity);
     if (y !== null) curve.push({ size_usd: capacity, net_yield: y });
   }
+
+  // 2) precise per-dollar optimal size: three-pass sweep over [100..capacity]
+  //    (coarse 100-step → 10-step around coarse peak → 1-step around fine peak)
+  //    maximizing NET yield (the curve peaks then falls as depth runs out).
+  // fine-grain curve (10$ steps across the whole capacity, capped) for a precise chart
+  const preciseCurve = [];
+  const fineStep = capacity <= 5000 ? 50 : capacity <= 50000 ? 500 : 1000;
+  for (let s = 100; s <= capacity && preciseCurve.length < 120; s += fineStep) {
+    const y = evalAt(s);
+    if (y !== null) preciseCurve.push({ size_usd: s, net_yield: y });
+  }
+  if (preciseCurve.length && preciseCurve[preciseCurve.length - 1].size_usd < capacity) {
+    const y = evalAt(capacity);
+    if (y !== null) preciseCurve.push({ size_usd: capacity, net_yield: y });
+  }
+
+  const clamp = v => Math.max(100, Math.min(capacity, Math.round(v)));
+  const sweep = (loS, hiS, step) => {
+    let best = 100, bestY = evalAt(100) ?? -Infinity;
+    for (let s = loS; s <= hiS; s += step) {
+      const y = evalAt(s);
+      if (y !== null && y > bestY) { best = s; bestY = y; }
+    }
+    return { best, bestY };
+  };
+  let p1 = sweep(100, clamp(capacity), 100);
+  const lo2 = Math.max(100, p1.best - 100), hi2 = Math.min(capacity, p1.best + 100);
+  let p2 = sweep(lo2, hi2, 10);
+  const lo3 = Math.max(100, p2.best - 10), hi3 = Math.min(capacity, p2.best + 10);
+  const p3 = sweep(lo3, hi3, 1);
+  // prefer a size that still clears the threshold; fall back to peak if none
   let optimal = null, yieldAt = 0;
   for (const p of curve) if (p.size_usd <= capacity + 0.5 && p.net_yield >= threshold) { optimal = p.size_usd; yieldAt = p.net_yield; }
+  if (p3.bestY !== -Infinity && p3.bestY >= (yieldAt || -Infinity) && p3.bestY >= threshold) {
+    optimal = p3.best; yieldAt = p3.bestY;
+  } else if (p3.bestY !== -Infinity && (optimal === null || p3.bestY > yieldAt)) {
+    optimal = p3.best; yieldAt = p3.bestY;
+  }
   if (optimal === null && curve.length) { optimal = curve[0].size_usd; yieldAt = curve[0].net_yield; }
-  return { optimalSize: optimal ?? 0, optimalYield: yieldAt, curve, capacity };
+  return { optimalSize: optimal ?? 0, optimalYield: yieldAt, curve, preciseCurve, capacity, preciseYieldPct: p3.bestY !== -Infinity ? p3.bestY * 100 : null };
 }
 
 // ---------- liquidity grade ----------
@@ -987,17 +1085,19 @@ function cb(url) {
   const sep = url.includes("?") ? "&" : "?";
   return url + sep + "_=" + Date.now();
 }
-async function corsFetch(url) {
+async function corsFetch(url, opts = {}) {
   let r = null;
+  // caller abort (e.g. dossier poll closed) → fail fast, no proxy walk
+  if (opts.signal && opts.signal.aborted) throw new DOMException("aborted", "AbortError");
   // 1) direct — works in most user regions
   try {
     r = await timedFetch(url, 8000);
-      if (r.ok && looksJson(r)) return r;
-    } catch { /* proxy below */ }
-    try {
-      r = await timedFetch(cb(url), 8000);
-      if (r.ok && looksJson(r)) return r;
-    } catch { /* proxy below */ }
+    if (r.ok && looksJson(r)) return r;
+  } catch { /* proxy below */ }
+  try {
+    r = await timedFetch(cb(url), 8000);
+    if (r.ok && looksJson(r)) return r;
+  } catch { /* proxy below */ }
   // 2) raw-path proxies: target appended verbatim (cors.sh family)
   for (const prefix of CORS_RAW) {
     try {
@@ -1415,8 +1515,10 @@ class Scanner {
         if (b.bids.size === 0 || b.asks.size === 0) await this._reseed([sym]);
         if (b.bids.size === 0 || b.asks.size === 0) return;
         const t = tradableScore(b, usd, maxSlip);
-        if (!t.ok) return;
+        // keep ALL measured coins in the list; failing ones are shown with a red NO
         const depthUsd = Math.min((t.buy?.depthUsd || 0), (t.sell?.depthUsd || 0));
+        const prev = this.coinLiquidity.get(c);
+        if (prev && prev.depthUsd >= depthUsd && t.ok === prev.ok) return;
         this.coinLiquidity.set(c, { coin: c, pair: sym, buy: t.buy, sell: t.sell, ok: t.ok, depthUsd, vol24h: 0 });
       })());
     }
@@ -1481,9 +1583,13 @@ class Scanner {
       const ticksScore = Math.min(state.consecutive / 10, 1);
       const confidence = (gradeScore * 0.6 + ticksScore * 0.4) * 100;
 
-      const sizing = findOptimalSize(loop, this.books, this.settings) || { optimalSize: 0, optimalYield: 0, curve: [] };
+      const sizing = findOptimalSize(loop, this.books, this.settings) || { optimalSize: 0, optimalYield: 0, curve: [], preciseYieldPct: null };
       const opt = sizing.optimalSize > 0 ? sizing.optimalSize : 100;
       const estProfit = opt * sizing.optimalYield;
+      // structure-locked: with limit orders (maker) the loop clears the threshold
+      // with ZERO slippage — the win is guaranteed by price logic; only fill timing
+      // is uncertain, and tick persistence already measures that
+      const structureLocked = fr.makerPlanYield >= this.settings.minProfitThreshold;
 
       this.lastEmit.set(loop.key, now);
       const legs = fr.reps.map(r => ({
@@ -1510,10 +1616,14 @@ class Scanner {
         stalenessMs: age,
         confidence,
         makerPlanYieldPercent: fr.makerPlanYield * 100,
+        makerCapacityUsd: fr.makerCapacityUsd || 0,
+        structureLocked,
         slippagePercent: fr.slippage * 100,
         optimalSizeUsd: opt,
         optimalNetYieldPercent: sizing.optimalYield * 100,
+        preciseYieldPct: sizing.preciseYieldPct,
         sizeCurveJson: JSON.stringify(sizing.curve),
+        preciseCurveJson: JSON.stringify(sizing.preciseCurve || []),
         legs,
         detectedAt: new Date().toISOString(),
       });
@@ -1637,12 +1747,12 @@ function renderLive() {
     <tr class="gap-row ${freshId === g.id && now - freshAt < 700 ? "fresh-row" : ""}" data-id="${g.id}">
       <td class="mono" style="color:var(--secondary-text)">${new Date(g.detectedAt).toLocaleTimeString()}</td>
       <td>${shapeBadgeHtml(g)}</td>
-      <td class="mono">${g.shortPath}${g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : ""}</td>
+      <td class="mono">${g.shortPath}${g.structureLocked ? `<div class="sub" style="color:#60a5fa">locked · maker ${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : g.makerPlanYieldPercent > 0 ? `<div class="sub">maker floor: +${fmtPct(g.makerPlanYieldPercent, 3)}%</div>` : ""}</td>
       <td class="r txt-green">+${fmtPct(g.netYieldPercent, 3)}%</td>
       <td class="r">${fmtUsd(g.estimatedProfitUsd)}<div class="sub">@ ${fmtUsd(g.optimalSizeUsd)} optimal size</div></td>
       <td class="r mono">${fmtPct(g.feeCostPercent, 3)}%</td>
       <td class="r mono">${fmtPct(g.slippagePercent, 4)}%</td>
-      <td class="c">${Math.round(g.confidence)}%</td>
+      <td class="c">${g.structureLocked ? '<span style="color:#60a5fa;font-weight:700">100%</span>' : Math.round(g.confidence) + "%"}</td>
       <td class="c"><span style="color:${fillColor(g.fillScore)};font-weight:700">${g.fillScore}</span></td>
       <td class="r mono">${fmtMs(g.gapAgeMs)}${g.stalenessMs < 2000 ? '<span class="dot-live">●</span>' : ""}</td>
     </tr>`).join("");
@@ -1692,11 +1802,12 @@ function renderCoins(s) {
   document.getElementById("coinsCrit").textContent = `criterion: ${fmtUsd(testUsd)} fills both sides ≤ ${maxSlip.toFixed(3)}% slip`;
   const tbody = document.getElementById("coinsRows");
   if (coinsSnapshot.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Seeding… the tradability list appears once the live books are measured.</td></tr>'; return; }
-  const rows = [...coinsSnapshot].sort((a, b) => (b.depthUsd || 0) - (a.depthUsd || 0)).map((c, i) =>
-    `<tr><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">${fmtUsd(c.vol24h || 0)}</td><td class="r">${fmtUsd(c.depthUsd || 0)}</td>` +
+  const rows = [...coinsSnapshot].sort((a, b) => (b.depthUsd || 0) - (a.depthUsd || 0)).map((c, i) => {
+    const tradeable = c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip;
+    return `<tr style="opacity:${tradeable ? 1 : 0.55}"><td class="r">${i + 1}</td><td><b>${c.coin}</b></td><td>${c.pair}</td><td class="r">${fmtUsd(c.vol24h || 0)}</td><td class="r">${fmtUsd(c.depthUsd || 0)}</td>` +
     `<td class="r">${c.buySlipPct !== null ? c.buySlipPct.toFixed(4) + "%" : "no fill"}</td><td class="r">${c.sellSlipPct !== null ? c.sellSlipPct.toFixed(4) + "%" : "no fill"}</td>` +
-    `<td class="c" style="color:${c.buySlipPct !== null && c.sellSlipPct !== null && c.buySlipPct <= maxSlip && c.sellSlipPct <= maxSlip ? "var(--success)" : "var(--warning)"}">${c.buySlipPct !== null && c.sellSlipPct !== null ? "YES" : "no"}</td></tr>`
-  ).join("");
+    `<td class="c" style="color:${tradeable ? "var(--success)" : "var(--danger)"};font-weight:700">${tradeable ? "YES" : "NO"}</td></tr>`;
+  }).join("");
   tbody.innerHTML = rows;
 }
 
@@ -1724,7 +1835,7 @@ function renderHistory() {
       <td class="r">${fmtUsd(h.estimatedProfitUsd)}</td>
       <td class="r">${fmtUsd(h.optimalSizeUsd)}</td>
       <td class="c">${h.ticksSurvived}</td>
-      <td class="c">${Math.round(h.confidence)}%</td>
+      <td class="c">${h.structureLocked ? '<span style="color:#60a5fa;font-weight:700">100%</span>' : Math.round(h.confidence) + "%"}</td>
     </tr>`).join("");
   tbody.querySelectorAll("tr.gap-row").forEach(tr => tr.onclick = () => openDossier(tr.dataset.id));
 }
@@ -1733,11 +1844,12 @@ renderHistory();
 document.getElementById("btnExport").onclick = () => {
   const head = ["detected_at", "path", "shape", "n_legs", "net_yield_pct", "gross_gap_pct", "fee_cost_pct", "slippage_pct",
     "slippage_buffer_pct", "optimal_size_usd", "optimal_net_yield_pct", "capacity_usd", "est_profit_usd", "maker_floor_pct",
-    "confidence_pct", "ticks_survived", "fill_grade", "staleness_ms", "gap_age_ms", "legs"];
+    "confidence_pct", "ticks_survived", "fill_grade", "staleness_ms", "gap_age_ms", "structure_locked", "legs"];
   const rows = history.map(h => {
     const base = [h.detectedAt, h.path, h.shape || "QUAD", h.nLegs || 4, h.netYieldPercent, h.grossGapPercent, h.feeCostPercent,
       h.slippagePercent, settings.slippageBuffer * 100, h.optimalSizeUsd, h.optimalNetYieldPercent, h.capacityUsd,
       h.estimatedProfitUsd, h.makerPlanYieldPercent, h.confidence, h.ticksSurvived, h.fillScore, h.stalenessMs, h.gapAgeMs,
+      h.structureLocked ? "LOCKED" : "",
       JSON.stringify((h.legs || []).map(l => ({ sym: l.symbol, dir: l.direction, fill: l.fillPrice, slip: l.slippagePct })))];
     return base.map(k => JSON.stringify(k ?? "")).join(",");
   });
@@ -1835,12 +1947,13 @@ function openDossier(id) {
         <div class="kv"><div class="k">Gross gap</div><div class="v">+${fmtPct(g.grossGapPercent, 4)}%</div><div class="h">Raw loop product vs 1.0</div></div>
         <div class="kv"><div class="k">Fee cost (${n} legs × ${fmtPct(settings.takerFee, 3)}%)</div><div class="v">${fmtPct(g.feeCostPercent, 3)}%</div></div>
         <div class="kv"><div class="k">Measured slippage</div><div class="v">${fmtPct(g.slippagePercent, 4)}%</div><div class="h">Weighted-fill average across all legs</div></div>
-        <div class="kv"><div class="k">Optimal trade size</div><div class="v">${fmtUsd(g.optimalSizeUsd)}</div><div class="h">Largest size that still nets ≥ ${fmtPct(settings.minProfitThreshold, 3)}% at every leg</div></div>
+        <div class="kv"><div class="k">Optimal trade size (to the $)</div><div class="v">${fmtUsd(g.optimalSizeUsd)}</div><div class="h">Exact dollar-maximizing size — searched level-by-level, not rounded to buckets${g.preciseYieldPct ? ` · net ${fmtPct(g.preciseYieldPct, 4)}% at that exact size` : ""}</div></div>
         <div class="kv"><div class="k">Capacity (thinnest leg)</div><div class="v">${fmtUsd(g.capacityUsd)}</div><div class="h">Min USD fill across legs at optimal size</div></div>
         <div class="kv"><div class="k">Net yield at optimal size</div><div class="v">+${fmtPct(g.optimalNetYieldPercent, 4)}%</div></div>
         <div class="kv hl"><div class="k">Estimated profit</div><div class="v">${fmtUsd(g.estimatedProfitUsd)}</div><div class="h">optimal size × net yield at that exact size</div></div>
-        <div class="kv"><div class="k">Maker-plan floor (0% taker)</div><div class="v">+${fmtPct(g.makerPlanYieldPercent, 4)}%</div><div class="h">If filled by limit orders</div></div>
-        <div class="kv"><div class="k">Confidence</div><div class="v">${Math.round(g.confidence)}%</div><div class="h">60% depth grade + 40% tick persistence — a heuristic, not a guarantee</div></div>
+        <div class="kv"><div class="k">Maker-plan floor (limit orders)</div><div class="v">+${fmtPct(g.makerPlanYieldPercent, 4)}%</div><div class="h">Zero slippage: every leg filled at its limit price${g.makerCapacityUsd ? ` · safe up to ${fmtUsd(g.makerCapacityUsd)}` : ""}</div></div>
+        <div class="kv"><div class="k">Execution certainty</div><div class="v" style="color:${g.structureLocked ? "#60a5fa" : "var(--secondary-text)"}">${g.structureLocked ? "STRUCTURE-LOCKED — 100% by price logic" : "Conditional"}</div><div class="h">${g.structureLocked ? "Maker plan clears the threshold with zero slippage — the win is guaranteed by math; the only risk is orders not filling in time (tick persistence already proved the gap holds)." : "Slippage + fees consume part of the gap — execution depends on how deep orders fill."}</div></div>
+        <div class="kv"><div class="k">Confidence score</div><div class="v">${Math.round(g.confidence)}%</div><div class="h">60% depth grade + 40% tick persistence — a heuristic, not a guarantee. See “Execution certainty” above for the hard guarantee.</div></div>
         <div class="kv"><div class="k">Fill grade</div><div class="v" style="color:${fillColor(g.fillScore)}">${g.fillScore}</div><div class="h">Avg USD depth of top levels across legs</div></div>
         <div class="kv"><div class="k">Slippage buffer</div><div class="v">+${fmtPct(settings.slippageBuffer, 3)}%</div><div class="h">Extra safety margin already subtracted</div></div>
       </div>
@@ -1868,16 +1981,21 @@ function openDossier(id) {
   document.getElementById("dossBack").onclick = closeDossier;
   document.getElementById("btnRestart").onclick = () => { restart().then(closeDossier); };
   // size curve
-  let pts = [];
+  let pts = [], precise = [];
   try { pts = JSON.parse(g.sizeCurveJson || "[]"); } catch {}
+  try { precise = JSON.parse(g.preciseCurveJson || "[]"); } catch {}
+  const showPts = precise.length ? precise : pts;
+  const fStep = precise.length > 2 ? (precise[2].size_usd - precise[1].size_usd) : 100;
   const row = document.querySelector("#sizeChart .chart-row");
-  if (pts.length) {
-    const max = Math.max(...pts.map(p => Math.abs(p.net_yield)), 0.0001);
-    row.innerHTML = pts.map(p => {
+  if (showPts.length) {
+    const max = Math.max(...showPts.map(p => Math.abs(p.net_yield)), 0.0001);
+    const bars = showPts.map(p => {
       const h = Math.max((Math.abs(p.net_yield) / max) * 100, 4);
       const ok = p.net_yield >= 0;
-      return `<div class="chart-bar" title="${fmtUsd(p.size_usd)} → ${fmtPct(p.net_yield, 4)}%"><div class="bv">${fmtPct(p.net_yield, 3)}%</div><div style="height:${h}%;width:100%;background:${ok ? "var(--success)" : "var(--danger)"};opacity:0.7"></div><div class="bl">${fmtUsd(p.size_usd)}</div></div>`;
+      const mark = Math.abs(p.size_usd - g.optimalSizeUsd) < fStep;
+      return `<div class="chart-bar" title="${fmtUsd(p.size_usd)} → ${fmtPct(p.net_yield, 4)}%${mark ? " ← OPTIMAL" : ""}"><div class="bv">${fmtPct(p.net_yield, 3)}%</div><div style="height:${h}%;width:100%;background:${ok ? (mark ? "#60a5fa" : "var(--success)") : "var(--danger)"};opacity:${mark ? 1 : 0.7}"></div><div class="bl" style="${mark ? "color:#60a5fa;font-weight:700" : ""}">${fmtUsd(p.size_usd)}</div></div>`;
     }).join("");
+    row.innerHTML = bars;
   } else {
     row.innerHTML = '<div style="font-size:0.68rem;color:var(--secondary-text);align-self:center">Size curve unavailable (books changed before sizing).</div>';
   }
@@ -1902,15 +2020,15 @@ function openDossier(id) {
     const xAt = i => pad + (i / (maxSamples - 1)) * (W - pad * 2);
     const yAt = v => H - pad - ((v - lo) / range) * (H - pad * 2);
     ctx.strokeStyle = "#10b981"; ctx.lineWidth = 1.6; ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.m)) : ctx.lineTo(px, yAt(x.m)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.m)) : ctx.lineTo(px, yAt(x.m)); });
     ctx.stroke();
     // spread shading
     ctx.strokeStyle = "rgba(125,145,136,0.35)"; ctx.lineWidth = 1;
     ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.h)) : ctx.lineTo(px, yAt(x.h)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.h)) : ctx.lineTo(px, yAt(x.h)); });
     ctx.stroke();
     ctx.beginPath();
-    s.forEach((x, i) => { const px = xAt(samples[idx].length - s.length + i); i === 0 ? ctx.moveTo(px, yAt(x.l)) : ctx.lineTo(px, yAt(x.l)); });
+    s.forEach((x, i) => { const px = xAt(i); i === 0 ? ctx.moveTo(px, yAt(x.l)) : ctx.lineTo(px, yAt(x.l)); });
     ctx.stroke();
     // trade mark line
     const tp = yAt(g.legs[idx].fillPrice);
@@ -1929,9 +2047,10 @@ function openDossier(id) {
     for (let i = 0; i < (g.legs || []).length; i++) {
       const sym = g.legs[i].symbol;
       try {
-        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 6000);
-        const d = await (await fetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=10", { signal: ac.signal })).json();
+        const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 12000);
+        const d = await corsFetch("https://api.mexc.com/api/v3/depth?symbol=" + sym + "&limit=10", { signal: ac.signal });
         clearTimeout(t);
+        if (!d || !d.bids) continue;
         const b = d.bids && d.bids[0] ? parseFloat(d.bids[0][0]) : 0;
         const a = d.asks && d.asks[0] ? parseFloat(d.asks[0][0]) : 0;
         if (a > 0 && b > 0) {

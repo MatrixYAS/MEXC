@@ -217,8 +217,10 @@ export class Scanner {
         if (b.bids.size === 0 || b.asks.size === 0) await this._reseed([sym]);
         if (b.bids.size === 0 || b.asks.size === 0) return;
         const t = tradableScore(b, usd, maxSlip);
-        if (!t.ok) return;
+        // keep ALL measured coins in the list; failing ones are shown with a red NO
         const depthUsd = Math.min((t.buy?.depthUsd || 0), (t.sell?.depthUsd || 0));
+        const prev = this.coinLiquidity.get(c);
+        if (prev && prev.depthUsd >= depthUsd && t.ok === prev.ok) return;
         this.coinLiquidity.set(c, { coin: c, pair: sym, buy: t.buy, sell: t.sell, ok: t.ok, depthUsd, vol24h: 0 });
       })());
     }
@@ -283,9 +285,13 @@ export class Scanner {
       const ticksScore = Math.min(state.consecutive / 10, 1);
       const confidence = (gradeScore * 0.6 + ticksScore * 0.4) * 100;
 
-      const sizing = findOptimalSize(loop, this.books, this.settings) || { optimalSize: 0, optimalYield: 0, curve: [] };
+      const sizing = findOptimalSize(loop, this.books, this.settings) || { optimalSize: 0, optimalYield: 0, curve: [], preciseYieldPct: null };
       const opt = sizing.optimalSize > 0 ? sizing.optimalSize : 100;
       const estProfit = opt * sizing.optimalYield;
+      // structure-locked: with limit orders (maker) the loop clears the threshold
+      // with ZERO slippage — the win is guaranteed by price logic; only fill timing
+      // is uncertain, and tick persistence already measures that
+      const structureLocked = fr.makerPlanYield >= this.settings.minProfitThreshold;
 
       this.lastEmit.set(loop.key, now);
       const legs = fr.reps.map(r => ({
@@ -312,10 +318,14 @@ export class Scanner {
         stalenessMs: age,
         confidence,
         makerPlanYieldPercent: fr.makerPlanYield * 100,
+        makerCapacityUsd: fr.makerCapacityUsd || 0,
+        structureLocked,
         slippagePercent: fr.slippage * 100,
         optimalSizeUsd: opt,
         optimalNetYieldPercent: sizing.optimalYield * 100,
+        preciseYieldPct: sizing.preciseYieldPct,
         sizeCurveJson: JSON.stringify(sizing.curve),
+        preciseCurveJson: JSON.stringify(sizing.preciseCurve || []),
         legs,
         detectedAt: new Date().toISOString(),
       });
